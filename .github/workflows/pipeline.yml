@@ -1,6 +1,3 @@
-env:
-  SHOULD_SKIP: ${{ contains(join(github.event.commits.*.message, ' '), '#skip') }}
-
 name: Deployment pipeline
 
 on:
@@ -14,6 +11,8 @@ on:
 jobs:
   simple_deployment_pipeline:
     runs-on: ubuntu-22.04
+    env:
+      SHOULD_SKIP: ${{ contains(join(github.event.commits.*.message, ' '), '#skip') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,6 +43,8 @@ jobs:
     needs: [simple_deployment_pipeline]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.SHOULD_SKIP != 'true' 
     runs-on: ubuntu-22.04
+    env:
+      SHOULD_SKIP: ${{ contains(join(github.event.commits.*.message, ' '), '#skip') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
