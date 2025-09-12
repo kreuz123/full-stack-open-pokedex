@@ -2,44 +2,163 @@ name: Sync urgent label from issue to PR
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number (for manual/local testing)'
+        required: true
+      issue_numbers:
+        description: 'Comma-separated issue numbers (e.g. 123,456). If empty, the workflow will try to parse from PR body on PR events'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  metadata: read
 
 jobs:
   sync-label:
     runs-on: ubuntu-latest
     steps:
-      - name: Extract related issue number
-        id: extract_issue
+      - name: Resolve PR number
+        id: pr
         uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.pull_request.body || '';
-            const match = body.match(/#(\d+)/);
-            core.setOutput('issue_number', match ? match[1] : '');
-
-      - name: Check if issue has urgent label
-        id: check_label
-        if: steps.extract_issue.outputs.issue_number != ''
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issueNumber = process.env.ISSUE_NUMBER;
-            if (!issueNumber) {
-              core.setOutput('has_urgent', false);
+            let prNumber;
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = core.getInput('pr_number', { required: true });
+            } else if (context.eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+            } else {
+              core.setFailed(`Unsupported event: ${context.eventName}`);
               return;
             }
-            const issue = await github.rest.issues.get({
+            core.setOutput('number', prNumber);
+
+      - name: Read PR body
+        id: prbody
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let body = '';
+            if (context.eventName === 'workflow_dispatch') {
+              // Fetch PR to read body when manually triggered
+              const prNumber = Number(core.getInput('pr_number', { required: true }));
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              body = pr.body || '';
+            } else {
+              body = (context.payload.pull_request.body || '');
+            }
+            core.setOutput('body', body);
+
+      - name: Extract issue numbers
+        id: issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const inputIssues = (core.getInput('issue_numbers') || '').trim();
+            let numbers = [];
+            if (inputIssues) {
+              numbers = inputIssues.split(',').map(s => s.trim()).filter(Boolean);
+            } else {
+              // Parse #123 / Fixes #123 等，只要出現 #number 就抓
+              const body = core.getOutput ? core.getOutput('body') : process.env.PR_BODY;
+              const text = body || '';
+              const matches = [...text.matchAll(/#(\d+)/g)].map(m => m[1]);
+              numbers = Array.from(new Set(matches)); // 去重
+            }
+            core.info(`Detected related issue numbers: ${numbers.join(', ') || '(none)'}`);
+            core.setOutput('numbers', JSON.stringify(numbers));
+
+      - name: Ensure 'urgent' label exists
+        id: ensure_label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labelName = 'urgent';
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName
+              });
+              core.info(`Label '${labelName}' exists.`);
+            } catch (err) {
+              if (err.status === 404) {
+                core.info(`Label '${labelName}' not found. Creating...`);
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: 'd73a4a', // red
+                  description: 'Marks urgent items'
+                });
+              } else {
+                throw err;
+              }
+            }
+
+      - name: Check if any related issue has 'urgent'
+        id: check_urgent
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const raw = core.getOutput ? core.getOutput('numbers') : process.env.ISSUE_NUMBERS;
+            const numbers = raw ? JSON.parse(raw) : [];
+            if (numbers.length === 0) {
+              core.setOutput('has_urgent', 'false');
+              core.info('No related issues detected.');
+              return;
+            }
+
+            const hasUrgent = async (n) => {
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(n)
+              });
+              return (issue.labels || []).some(l => (l.name || '').toLowerCase() === 'urgent');
+            };
+
+            let anyUrgent = false;
+            for (const n of numbers) {
+              try {
+                if (await hasUrgent(n)) {
+                  anyUrgent = true;
+                  core.info(`Issue #${n} has 'urgent' label.`);
+                  break;
+                } else {
+                  core.info(`Issue #${n} does not have 'urgent' label.`);
+                }
+              } catch (e) {
+                core.warning(`Failed to read issue #${n}: ${e.message}`);
+              }
+            }
+            core.setOutput('has_urgent', String(anyUrgent));
+
+      - name: Add 'urgent' label to PR (if needed)
+        if: steps.check_urgent.outputs.has_urgent == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number(core.getOutput('number'));
+            const labelName = 'urgent';
+            await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issueNumber
+              issue_number: prNumber,
+              labels: [labelName]
             });
-            core.setOutput('has_urgent', issue.data.labels.some(label => label.name === 'urgent'));
-        env:
-          ISSUE_NUMBER: ${{ steps.extract_issue.outputs.issue_number }}
+            core.info(`Added '${labelName}' label to PR #${prNumber}.`)
 
-      - name: Add urgent label to PR
-        if: steps.check_label.outputs.has_urgent == 'true'
-        uses: actions-ecosystem/action-add-labels@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          labels: urgent
+      - name: Log result
+        run: |
+          echo "has_urgent = ${{ steps.check_urgent.outputs.has_urgent }}"
