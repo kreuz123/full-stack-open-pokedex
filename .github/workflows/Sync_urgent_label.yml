@@ -23,7 +23,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNumber = '${{ steps.extract_issue.outputs.issue_number }}';
+            const issueNumber = process.env.ISSUE_NUMBER;
             if (!issueNumber) {
               core.setOutput('has_urgent', false);
               return;
@@ -34,6 +34,8 @@ jobs:
               issue_number: issueNumber
             });
             core.setOutput('has_urgent', issue.data.labels.some(label => label.name === 'urgent'));
+        env:
+          ISSUE_NUMBER: ${{ steps.extract_issue.outputs.issue_number }}
 
       - name: Add urgent label to PR
         if: steps.check_label.outputs.has_urgent == 'true'
