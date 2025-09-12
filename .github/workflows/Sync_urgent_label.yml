@@ -24,16 +24,19 @@ jobs:
         with:
           script: |
             const issueNumber = '${{ steps.extract_issue.outputs.issue_number }}';
-            if (!issueNumber) return false;
+            if (!issueNumber) {
+              core.setOutput('has_urgent', false);
+              return;
+            }
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber
             });
-            return issue.data.labels.some(label => label.name === 'urgent');
+            core.setOutput('has_urgent', issue.data.labels.some(label => label.name === 'urgent'));
 
       - name: Add urgent label to PR
-        if: steps.check_label.outputs.result == 'true'
+        if: steps.check_label.outputs.has_urgent == 'true'
         uses: actions-ecosystem/action-add-labels@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
