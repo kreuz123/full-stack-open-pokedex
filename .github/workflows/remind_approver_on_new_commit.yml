@@ -2,7 +2,11 @@ name: Remind Approver On New Commit
 
 on:
   pull_request:
-    types: [synchronize]
+    types: [synchronize] 
+
+permissions:
+  contents: read
+  pull-requests: write    
 
 jobs:
   remind-approver:
@@ -11,16 +15,38 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Get approved reviewers
+      - name: Find dismissed approvers and notify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          # Get PR number
-          pr_number="${{ github.event.pull_request.number }}"
-          repo="${{ github.repository }}"
-          # Search approve reviewers
-          approved_reviewers=$(gh pr reviews $pr_number --repo $repo --json author,state | jq -r '.[] | select(.state=="APPROVED") | .author.login')
-          # Inform approved reviewer
-          for reviewer in $approved_reviewers; do
-            gh pr comment $pr_number --repo $repo --body "@$reviewer new commits pushed, your approval is now invalid, please review again!"
+          dismissed_approvers=$(
+            gh pr reviews "$PR_NUMBER" --repo "$REPO" --json author,state,submittedAt \
+            | jq -r '
+                sort_by([.author.login, .submittedAt])
+                | group_by(.author.login)
+                | map(
+                    select(
+                      (map(.state) | any(. == "APPROVED"))  
+                      and
+                      (.[-1].state == "DISMISSED")           
+                    )
+                  )
+                | .[].author.login
+              ' | sort -u
+          )
+
+          if [ -z "$dismissed_approvers" ]; then
+            echo "No dismissed approvers found."
+            exit 0
+          fi
+
+          for reviewer in $dismissed_approvers; do
+            echo "Notifying @$reviewer ..."
+            gh pr comment "$PR_NUMBER" --repo "$REPO" \
+              --body "@$reviewer New commits have been pushed. Your previous approval was dismissed. Please review again. $PR_URL"
           done
+
