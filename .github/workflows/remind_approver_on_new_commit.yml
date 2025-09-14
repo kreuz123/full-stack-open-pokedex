@@ -2,11 +2,11 @@ name: Remind Approver On New Commit
 
 on:
   pull_request:
-    types: [synchronize]  
+    types: [synchronize]
 
 permissions:
   contents: read
-  pull-requests: write     
+  pull-requests: write
 
 jobs:
   remind-approver:
@@ -26,18 +26,9 @@ jobs:
           dismissed_approvers=$(
             gh api "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
             | jq -r '
-                # Sort reviews by submission time and group them by user
-                sort_by(.submitted_at)
-                | group_by(.user.login)
-                | map(
-                    # Select groups where at least one review was APPROVED and the most recent one was DISMISSED
-                    select(
-                      (map(.state) | any(. == "APPROVED"))  
-                      and
-                      (.[-1].state == "DISMISSED")        
-                    )
-                  )
-                | .[].user.login
+                (map(select(.state == "DISMISSED") | .user.login) | unique) as $dismissed_users
+                | (map(select(.state == "APPROVED") | .user.login) | unique) as $approved_users
+                | ($dismissed_users | .[] | select(in($approved_users[])))
               ' | sort -u
           )
 
