@@ -5,47 +5,47 @@ on:
     types: [opened]
 
 permissions:
+  contents: read
   pull-requests: write
   issues: write
-  contents: read
 
 jobs:
   sync-label:
     runs-on: ubuntu-latest
     steps:
-      # 1. 從 PR body 抓 issue number
-      - name: Extract related issue number
-        id: extract_issue
-        run: |
-          body="${{ github.event.pull_request.body }}"
-          if [[ "$body" =~ \#([0-9]+) ]]; then
-            echo "issue_number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-          else
-            echo "issue_number=" >> "$GITHUB_OUTPUT"
-          fi
-
-      # 2. 檢查 issue 是否有 urgent 標籤
-      - name: Check if issue has urgent label
-        id: check_label
-        if: ${{ steps.extract_issue.outputs.issue_number != '' }}
+      - name: Check related issues and add 'urgent' to PR if needed
         uses: actions/github-script@v7
-        env:
-          ISSUE_NUMBER: ${{ steps.extract_issue.outputs.issue_number }}
         with:
           script: |
-            const issueNumber = process.env.ISSUE_NUMBER;
+            // 1) 從 PR body 擷取第一個 #<number>
+            const body = context.payload.pull_request?.body || '';
+            const m = body.match(/#(\d+)/);
+            if (!m) {
+              core.info('No related issue number found in PR body.');
+              return;
+            }
+            const issueNumber = Number(m[1]);
+            core.info(`Found related issue #${issueNumber}.`);
+
+            // 2) 讀取該 issue 是否有 urgent 標籤
             const { data: issue } = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number(issueNumber)
+              issue_number: issueNumber
             });
-            const hasUrgent = issue.labels.some(l => (l.name || '').toLowerCase() === 'urgent');
-            core.setOutput('has_urgent', String(hasUrgent));
+            const hasUrgent = (issue.labels || []).some(l => (l.name || '').toLowerCase() === 'urgent');
+            core.info(`Related issue urgent? ${hasUrgent}`);
 
-      # 3. 若需要，給 PR 加 urgent 標籤
-      - name: Add urgent label to PR
-        if: ${{ steps.check_label.outputs.has_urgent == 'true' }}
-        uses: actions-ecosystem/action-add-labels@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          labels: urgent
+            // 3) 若是 urgent，替本 PR 加上 urgent 標籤
+            if (hasUrgent) {
+              const prNumber = context.payload.pull_request.number;
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: ['urgent']
+              });
+              core.info(`Added 'urgent' label to PR #${prNumber}.`);
+            } else {
+              core.info('No urgent label added to PR.');
+            }
