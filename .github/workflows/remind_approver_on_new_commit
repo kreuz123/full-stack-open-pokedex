@@ -1,0 +1,26 @@
+name: Remind Approver On New Commit
+
+on:
+  pull_request:
+    types: [synchronize]
+
+jobs:
+  remind-approver:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Get approved reviewers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get PR number
+          pr_number="${{ github.event.pull_request.number }}"
+          repo="${{ github.repository }}"
+          # Search approve reviewers
+          approved_reviewers=$(gh pr reviews $pr_number --repo $repo --json author,state | jq -r '.[] | select(.state=="APPROVED") | .author.login')
+          # Inform approved reviewer
+          for reviewer in $approved_reviewers; do
+            gh pr comment $pr_number --repo $repo --body "@$reviewer new commits pushed, your approval is now invalid, please review again!"
+          done
