@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
+        
       - name: Print raw API output for debugging
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -30,25 +30,39 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          dismissed_approvers=$(
-            gh api "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-            | jq -r '
-                (map(select(.state == "DISMISSED") | .user.login) | unique) as $dismissed_users
-                | (map(select(.state == "APPROVED") | .user.login) | unique) as $approved_users
-                | ($dismissed_users | .[] | select(in($approved_users[])))
-              ' | sort -u
+        
+          PR_STATUS=$(gh pr status --repo "$REPO" --json reviewDecision -f "$PR_NUMBER")
+          REVIEW_DECISION=$(echo "$PR_STATUS" | jq -r '.[].reviewDecision')
+
+          if [ "$REVIEW_DECISION" != "REVIEW_REQUIRED" ]; then
+            echo "PR review is not required or already approved. Skipping reminder."
+            exit 0
+          fi
+          
+          ALL_REVIEWERS=$(
+            gh pr reviews "$PR_NUMBER" --repo "$REPO" --json author | jq -r '.[].author.login' | sort -u
           )
 
-          if [ -z "$dismissed_approvers" ]; then
-            echo "No dismissed approvers found."
+          DISMISSED_REVIEWER=$(
+            gh api "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            | jq -r '
+              map(select(.state == "DISMISSED"))
+              | sort_by(.submitted_at)
+              | .[-1].user.login
+            '
+          )
+
+          if [ -z "$DISMISSED_REVIEWER" ]; then
+            echo "No dismissed reviewer found in recent history. Skipping."
             exit 0
           fi
 
-          for reviewer in $dismissed_approvers; do
-            echo "Notifying @$reviewer ..."
+          if [[ "$ALL_REVIEWERS" == *"$DISMISSED_REVIEWER"* ]]; then
+            echo "Notifying @$DISMISSED_REVIEWER ..."
             gh pr comment "$PR_NUMBER" --repo "$REPO" \
-              --body "@$reviewer New commits have been pushed. Your previous approval was dismissed. Please review again. $PR_URL"
-          done
+              --body "@$DISMISSED_REVIEWER New commits have been pushed. Your previous approval was dismissed. Please review again. $PR_URL"
+          else
+            echo "The most recent dismissed reviewer is not in the list of all reviewers. Skipping."
+          fi
