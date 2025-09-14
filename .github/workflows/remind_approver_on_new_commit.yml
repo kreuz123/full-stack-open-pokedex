@@ -15,6 +15,16 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Print raw API output for debugging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "--- Raw API Output ---"
+          gh api "/repos/$REPO/pulls/$PR_NUMBER/reviews"
+          echo "--- End of Raw API Output ---"
+
       - name: Find dismissed approvers and notify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
