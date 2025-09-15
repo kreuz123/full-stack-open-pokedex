@@ -46,8 +46,21 @@ jobs:
             exit 0
           fi
 
-          # Step 2: Get the commit time of the last commit in the PR
-          LAST_COMMIT_TIME=$(gh pr view "$PR_NUMBER" -R "$REPO" --json commits -q '.commits[-1].commit.committedDate' || echo "")
+          # Step 2: Get the commit time of the last commit in the PR (robust with fallback)
+          # Try via gh pr view (GraphQL)
+          LAST_COMMIT_TIME=$(gh pr view "$PR_NUMBER" -R "$REPO" --json commits -q '.commits | select(length>0) | .[-1].committedDate' || echo "")
+
+          # Fallback via REST if empty/null
+          if [ -z "$LAST_COMMIT_TIME" ] || [ "$LAST_COMMIT_TIME" = "null" ]; then
+            COMMITS_JSON=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/pulls/$PR_NUMBER/commits?per_page=250")
+            # Prefer committer.date; if missing, use author.date
+            LAST_COMMIT_TIME=$(echo "$COMMITS_JSON" | jq -r '
+              if length > 0 then
+                .[-1].commit.committer.date // .[-1].commit.author.date // empty
+              else empty end
+            ')
+          fi
+
           if [ -z "$LAST_COMMIT_TIME" ] || [ "$LAST_COMMIT_TIME" = "null" ]; then
             echo "Cannot determine last commit time; skipping."
             exit 0
