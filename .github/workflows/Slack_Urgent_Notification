@@ -1,0 +1,16 @@
+name: Notify Slack on Urgent Label
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  notify_slack:
+    if: github.event.label.name == 'urgent'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_MESSAGE: "🚨 Urgent PR: ${{ github.event.pull_request.title }} - ${{ github.event.pull_request.html_url }}"
