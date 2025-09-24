@@ -10,7 +10,7 @@ on:
 
 jobs:
   notify_urgent:
-    if: github.event.label.name == 'urgent'
+    if: contains(github.event.pull_request.labels.*.name, 'urgent')
     runs-on: ubuntu-latest
     steps:
       - name: Check PR label still present
