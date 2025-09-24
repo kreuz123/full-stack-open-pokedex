@@ -1,6 +1,10 @@
 name: Urgent PR Slack Notification
 
 on:
+  workflow_run:
+    workflows: ["Sync urgent label for issue to PR"]
+    types:
+      - completed
   pull_request:
     types: [labeled, opened]
 
