@@ -1,35 +1,35 @@
-name: Urgent PR Slack Notification
-
 on:
-  workflow_run:
-    workflows: ["Sync urgent label for issue to PR"]
-    types:
-      - completed
   pull_request:
-    types: [labeled, opened]
+    types: [opened, labeled, synchronize]
 
 jobs:
   notify_urgent:
-    if: contains(github.event.pull_request.labels.*.name, 'urgent')
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR label still present
-        uses: actions/github-script@v7
+      - name: Find PR number
+        id: pr
+        run: echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Check label "urgent"
         id: label_check
+        uses: actions/github-script@v7
         with:
           script: |
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
+              pull_number: Number('${{ steps.pr.outputs.number }}')
             });
-            const hasUrgent = pr.data.labels.some(label => label.name === 'urgent');
-            return hasUrgent;
+            const hasUrgent = pr.data.labels.some(l => l.name === 'urgent');
+            core.setOutput('hasUrgent', String(hasUrgent));
+            core.setOutput('url', pr.data.html_url);
+            core.setOutput('title', pr.data.title);
+
       - name: Send Slack notification if urgent
-        if: steps.label_check.outputs.result == 'true'
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
         uses: slackapi/slack-github-action@v1.25.0
         with:
           payload: |
-            {
-              "text": "🚨 Urgent PR: <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}> needs review within 30 minutes!"
-            }
+            { "text": "🚨 Urgent PR: <${{ steps.label_check.outputs.url }}|${{ steps.label_check.outputs.title }}> needs review within 30 minutes!" }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
