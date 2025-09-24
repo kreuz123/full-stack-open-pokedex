@@ -37,8 +37,11 @@ jobs:
         if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
         uses: slackapi/slack-github-action@v1.25.0
         with:
-          webhookUrl: ${{ secrets.SLACK_WEBHOOK_URL }}
           payload: |
-            {
+            { 
+              "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
               "text": "🚨 Urgent PR: <${{ steps.label_check.outputs.url }}|${{ steps.label_check.outputs.title }}> needs review within 30 minutes!"
             }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
