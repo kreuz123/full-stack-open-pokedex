@@ -1,6 +1,6 @@
 on:
   pull_request:
-    types: [opened, labeled, review_requested]  
+    types: [labeled, review_requested]  
 
 jobs:
   notify_urgent:
