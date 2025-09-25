@@ -70,16 +70,13 @@ jobs:
             } else if (action === 'labeled') {
               const isUrgentLabel = (context.payload.label?.name || '').toLowerCase() === 'urgent';
               if (isUrgentLabel) {
-                // Before posting for 'urgent', wait a moment to see if reviewers get added (CODEOWNERS)
-                const users = await pollUsers(6, 1000);
-                ghUsers = users;
-                // post only if still no reviewers; otherwise let upcoming review_requested handle the channel post
-                shouldChannelPost = users.length === 0;
-              } else {
-                shouldChannelPost = false;
-              }
+              const users = await listUsers(); 
+              ghUsers = users;
+              shouldChannelPost = true;        
+            } else {
+              shouldChannelPost = false;
             }
-
+          }
             const uniq = [...new Set(ghUsers)];
             const slackIds = uniq.map(u => map[u] || map[u?.toLowerCase?.()]).filter(Boolean);
             const mentions = slackIds.map(id => `<@${id}>`).join(' ');
