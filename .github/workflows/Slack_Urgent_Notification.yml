@@ -1,3 +1,5 @@
+name: Urgent PR Slack Notification
+
 on:
   pull_request:
     types: [labeled, review_requested]
@@ -19,7 +21,9 @@ jobs:
           script: |
             const prNumber = Number(`${{ steps.pr.outputs.number }}`);
             const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
             });
             const labels = (pr.labels || []).map(l => (l.name || '').trim());
             let hasUrgent = labels.some(n => n.toLowerCase() === 'urgent');
@@ -50,7 +54,9 @@ jobs:
 
             const listUsers = async () => {
               const { data } = await github.rest.pulls.listRequestedReviewers({
-                owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
               });
               return (data.users || []).map(u => u.login);
             };
@@ -65,9 +71,10 @@ jobs:
             } else if (action === 'labeled') {
               const isUrgentLabel = (context.payload.label?.name || '').toLowerCase() === 'urgent';
               if (isUrgentLabel) {
-                // Post to channel for urgent label; mention current reviewers if any
-                ghUsers = await listUsers();   // may be []
-                shouldChannelPost = true;      // ALWAYS post on urgent label
+                const users = await listUsers();
+                ghUsers = users;
+                // If reviewers already exist (e.g. CODEOWNERS), skip here and let review_requested handle it
+                shouldChannelPost = users.length === 0;
               } else {
                 shouldChannelPost = false;
               }
@@ -110,19 +117,25 @@ jobs:
             const text = `🚨 Urgent PR: <${prUrl}|${prTitle}> needs your review ASAP.`;
 
             for (const userId of slackIds) {
-              // Open DM (requires Slack scope: im:write)
+              // Open DM
               let res = await fetch('https://slack.com/api/conversations.open', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded','Authorization': `Bearer ${token}`},
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Authorization': `Bearer ${token}`
+                },
                 body: new URLSearchParams({ users: userId })
               });
               const opened = await res.json();
               if (!opened.ok) { core.warning(`Open DM failed for ${userId}: ${JSON.stringify(opened)}`); continue; }
 
-              // Send message (requires chat:write)
+              // Send message
               res = await fetch('https://slack.com/api/chat.postMessage', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json; charset=utf-8','Authorization': `Bearer ${token}`},
+                headers: {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({ channel: opened.channel.id, text })
               });
               const sent = await res.json();
