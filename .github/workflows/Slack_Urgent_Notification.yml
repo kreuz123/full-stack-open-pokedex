@@ -1,22 +1,16 @@
-name: Urgent PR Slack Notification
-
 on:
   pull_request:
-    types: [opened, labeled, synchronize, review_requested]
-
-permissions:
-  contents: read
-  pull-requests: read
+    types: [opened, labeled, review_requested]  
 
 jobs:
   notify_urgent:
     runs-on: ubuntu-latest
-
     steps:
       - name: Get PR number
         id: pr
         run: echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
+      # Check 'urgent' & basic PR info
       - name: Check label "urgent"
         id: label_check
         uses: actions/github-script@v7
@@ -24,101 +18,103 @@ jobs:
           script: |
             const prNumber = Number(`${{ steps.pr.outputs.number }}`);
             const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
             });
             const labels = (pr.labels || []).map(l => (l.name || '').trim());
-            const hasUrgent = labels.some(n => n.toLowerCase().startsWith('urgent'));
+            const hasUrgent = labels.some(n => n.toLowerCase() === 'urgent');
             core.setOutput('hasUrgent', String(hasUrgent));
             core.setOutput('prTitle', pr.title);
             core.setOutput('prUrl', pr.html_url);
 
-      # Only requested_reviewers. If event=review_requested -> only the newly added reviewer.
-      - name: Collect reviewers (requested_reviewers only)
-        id: reviewers
+      # Decide who to notify and whether to post to channel
+      - name: Compute targets & channel-post rule
+        id: targets
         uses: actions/github-script@v7
         env:
-          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }} # {"ghLogin":"Uxxxxx"}
+          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
         with:
           script: |
             const map = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
             const action = context.payload.action;
             const prNumber = Number(`${{ steps.pr.outputs.number }}`);
 
-            const fetchRequested = async () => {
+            // helpers
+            const listUsers = async () => {
               const { data } = await github.rest.pulls.listRequestedReviewers({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
               });
               return (data.users || []).map(u => u.login);
             };
 
+            // figure reviewers for this event
             let ghUsers = [];
             if (action === 'review_requested' && context.payload.requested_reviewer) {
-              // Only the newly added reviewer
-              ghUsers = [context.payload.requested_reviewer.login];
+              ghUsers = [context.payload.requested_reviewer.login]; // only the newly added
             } else {
-              // For opened/labeled/synchronize: take current requested reviewers (may be empty)
-              ghUsers = await fetchRequested();
+              ghUsers = await listUsers(); // may be empty on opened
             }
 
             const uniq = [...new Set(ghUsers)];
             const slackIds = uniq.map(u => map[u] || map[u?.toLowerCase?.()]).filter(Boolean);
             const mentions = slackIds.map(id => `<@${id}>`).join(' ');
 
+            // should we post to the team channel for this event?
+            // - opened: only if there are NO reviewers yet
+            // - labeled: only if this label action is 'urgent'
+            // - review_requested: always (to announce and @mention the new reviewer)
+            let shouldChannelPost = false;
+            if (action === 'opened') {
+              shouldChannelPost = uniq.length === 0;
+            } else if (action === 'labeled') {
+              shouldChannelPost = (context.payload.label?.name || '').toLowerCase() === 'urgent';
+            } else if (action === 'review_requested') {
+              shouldChannelPost = true;
+            }
+
             core.setOutput('mentions', mentions);
             core.setOutput('slackIds', JSON.stringify(slackIds));
             core.setOutput('hasReviewers', String(slackIds.length > 0));
+            core.setOutput('shouldChannelPost', String(shouldChannelPost));
 
-      # Always post to team channel when urgent.
-      # If there are reviewers in this event, it tags them; otherwise no @mention.
-      - name: Post to team channel if urgent
-        if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
+      # Post to team channel only when our rule says so AND PR is urgent
+      - name: Post to team channel (deduped)
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.targets.outputs.shouldChannelPost == 'true' }}
         uses: slackapi/slack-github-action@v1.25.0
         with:
           channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
           slack-message: >
             🚨 Urgent PR: <${{ steps.label_check.outputs.prUrl }}|${{ steps.label_check.outputs.prTitle }}>
-            needs review ASAP! ${{ steps.reviewers.outputs.hasReviewers == 'true' && steps.reviewers.outputs.mentions || '' }}
+            needs review ASAP! ${{ steps.targets.outputs.hasReviewers == 'true' && steps.targets.outputs.mentions || '' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
-      # DM reviewers only when we have any (e.g., when review_requested fires or CODEOWNERS added at open)
-      - name: DM each reviewer if urgent
-        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.reviewers.outputs.hasReviewers == 'true' }}
+      # DM only the reviewers applicable to this event (new reviewer on review_requested, or existing reviewers on opened with CODEOWNERS)
+      - name: DM reviewers
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.targets.outputs.hasReviewers == 'true' }}
         uses: actions/github-script@v7
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         with:
           script: |
             const token = process.env.SLACK_BOT_TOKEN;
-            const slackIds = JSON.parse(`${{ steps.reviewers.outputs.slackIds }}`);
+            const slackIds = JSON.parse(`${{ steps.targets.outputs.slackIds }}`);
             const prUrl = `${{ steps.label_check.outputs.prUrl }}`;
             const prTitle = `${{ steps.label_check.outputs.prTitle }}`;
             const text = `🚨 Urgent PR: <${prUrl}|${prTitle}> needs your review ASAP.`;
 
             for (const userId of slackIds) {
-              // Open DM
+              // open DM
               let res = await fetch('https://slack.com/api/conversations.open', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'Authorization': `Bearer ${token}`
-                },
+                headers: {'Content-Type': 'application/x-www-form-urlencoded','Authorization': `Bearer ${token}`},
                 body: new URLSearchParams({ users: userId })
               });
               const opened = await res.json();
               if (!opened.ok) { core.warning(`Open DM failed for ${userId}: ${JSON.stringify(opened)}`); continue; }
-
-              // Send message
+              // send
               res = await fetch('https://slack.com/api/chat.postMessage', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json; charset=utf-8',
-                  'Authorization': `Bearer ${token}`
-                },
+                headers: {'Content-Type': 'application/json; charset=utf-8','Authorization': `Bearer ${token}`},
                 body: JSON.stringify({ channel: opened.channel.id, text })
               });
               const sent = await res.json();
