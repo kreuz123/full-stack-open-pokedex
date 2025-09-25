@@ -29,19 +29,17 @@ jobs:
               pull_number: prNumber
             });
             const labels = (pr.labels || []).map(l => (l.name || '').trim());
-            core.info(`PR #${prNumber} labels: ${JSON.stringify(labels)}`);
-
             const hasUrgent = labels.some(n => n.toLowerCase().startsWith('urgent'));
             core.setOutput('hasUrgent', String(hasUrgent));
             core.setOutput('prTitle', pr.title);
             core.setOutput('prUrl', pr.html_url);
 
-      # Only take requested_reviewers; support CODEOWNERS auto-assigning at PR creation (retry up to 3 times)
+      # Only requested_reviewers. If event=review_requested -> only the newly added reviewer.
       - name: Collect reviewers (requested_reviewers only)
         id: reviewers
         uses: actions/github-script@v7
         env:
-          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }} 
+          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }} # {"ghLogin":"Uxxxxx"}
         with:
           script: |
             const map = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
@@ -58,45 +56,36 @@ jobs:
             };
 
             let ghUsers = [];
-
             if (action === 'review_requested' && context.payload.requested_reviewer) {
+              // Only the newly added reviewer
               ghUsers = [context.payload.requested_reviewer.login];
             } else {
-              const maxAttempts = 3;
-              for (let i = 1; i <= maxAttempts; i++) {
-                ghUsers = await fetchRequested();
-                if (ghUsers.length > 0) break;
-                await new Promise(r => setTimeout(r, 1000));
-              }
+              // For opened/labeled/synchronize: take current requested reviewers (may be empty)
+              ghUsers = await fetchRequested();
             }
 
             const uniq = [...new Set(ghUsers)];
-            core.info(`Requested reviewers (GH): ${JSON.stringify(uniq)}`);
-
-            const slackIds = uniq.map(u => map[u]).filter(Boolean);
-            if (uniq.length && !slackIds.length) {
-              core.warning('No Slack IDs mapped for requested reviewers. Check vars.SLACK_REVIEWER_MAP.');
-            }
-
+            const slackIds = uniq.map(u => map[u] || map[u?.toLowerCase?.()]).filter(Boolean);
             const mentions = slackIds.map(id => `<@${id}>`).join(' ');
 
             core.setOutput('mentions', mentions);
             core.setOutput('slackIds', JSON.stringify(slackIds));
             core.setOutput('hasReviewers', String(slackIds.length > 0));
 
-      # Team channel notification (with @mentions)
+      # Always post to team channel when urgent.
+      # If there are reviewers in this event, it tags them; otherwise no @mention.
       - name: Post to team channel if urgent
-        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.reviewers.outputs.hasReviewers == 'true' }}
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
         uses: slackapi/slack-github-action@v1.25.0
         with:
-          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}   # C*/G*, make sure the bot is invited to the channel
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
           slack-message: >
             🚨 Urgent PR: <${{ steps.label_check.outputs.prUrl }}|${{ steps.label_check.outputs.prTitle }}>
-            needs review ASAP! ${{ steps.reviewers.outputs.mentions }}
+            needs review ASAP! ${{ steps.reviewers.outputs.hasReviewers == 'true' && steps.reviewers.outputs.mentions || '' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
-      # DM each reviewer
+      # DM reviewers only when we have any (e.g., when review_requested fires or CODEOWNERS added at open)
       - name: DM each reviewer if urgent
         if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.reviewers.outputs.hasReviewers == 'true' }}
         uses: actions/github-script@v7
