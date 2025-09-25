@@ -27,7 +27,7 @@ jobs:
             core.setOutput('prUrl', pr.html_url);
 
       # Decide who to notify and whether to post to channel
-      - name: Compute targets & channel-post rule
+      - name: Compute targets & channel-post rule (dedup)
         id: targets
         uses: actions/github-script@v7
         env:
@@ -38,7 +38,6 @@ jobs:
             const action = context.payload.action;
             const prNumber = Number(`${{ steps.pr.outputs.number }}`);
 
-            // helpers
             const listUsers = async () => {
               const { data } = await github.rest.pulls.listRequestedReviewers({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
@@ -46,36 +45,52 @@ jobs:
               return (data.users || []).map(u => u.login);
             };
 
-            // figure reviewers for this event
+            // small polling helper to wait for CODEOWNERS/automation to add reviewers
+            const pollUsers = async (attempts = 6, waitMs = 1000) => {
+              for (let i = 1; i <= attempts; i++) {
+                const users = await listUsers();
+                if (users.length) return users;
+                await new Promise(r => setTimeout(r, waitMs));
+              }
+              return [];
+            };
+
             let ghUsers = [];
+            let shouldChannelPost = false;
+
             if (action === 'review_requested' && context.payload.requested_reviewer) {
-              ghUsers = [context.payload.requested_reviewer.login]; // only the newly added
-            } else {
-              ghUsers = await listUsers(); // may be empty on opened
+              // This event announces the newly added reviewer
+              ghUsers = [context.payload.requested_reviewer.login];
+              shouldChannelPost = true; // always post for review_requested
+            } else if (action === 'opened') {
+              // On open: check if reviewers appear shortly (CODEOWNERS). If they do, skip posting now.
+              const users = await pollUsers(6, 1000);
+              ghUsers = users;
+              shouldChannelPost = users.length === 0; // post only when still no reviewers
+            } else if (action === 'labeled') {
+              const isUrgentLabel = (context.payload.label?.name || '').toLowerCase() === 'urgent';
+              if (isUrgentLabel) {
+                // Before posting for 'urgent', wait a moment to see if reviewers get added (CODEOWNERS)
+                const users = await pollUsers(6, 1000);
+                ghUsers = users;
+                // post only if still no reviewers; otherwise let upcoming review_requested handle the channel post
+                shouldChannelPost = users.length === 0;
+              } else {
+                shouldChannelPost = false;
+              }
             }
 
             const uniq = [...new Set(ghUsers)];
             const slackIds = uniq.map(u => map[u] || map[u?.toLowerCase?.()]).filter(Boolean);
             const mentions = slackIds.map(id => `<@${id}>`).join(' ');
 
-            // should we post to the team channel for this event?
-            // - opened: only if there are NO reviewers yet
-            // - labeled: only if this label action is 'urgent'
-            // - review_requested: always (to announce and @mention the new reviewer)
-            let shouldChannelPost = false;
-            if (action === 'opened') {
-              shouldChannelPost = uniq.length === 0;
-            } else if (action === 'labeled') {
-              shouldChannelPost = (context.payload.label?.name || '').toLowerCase() === 'urgent';
-            } else if (action === 'review_requested') {
-              shouldChannelPost = true;
-            }
+            core.info(`Reviewers for this event: ${JSON.stringify(uniq)}; shouldChannelPost=${shouldChannelPost}`);
 
             core.setOutput('mentions', mentions);
             core.setOutput('slackIds', JSON.stringify(slackIds));
             core.setOutput('hasReviewers', String(slackIds.length > 0));
             core.setOutput('shouldChannelPost', String(shouldChannelPost));
-
+          
       # Post to team channel only when our rule says so AND PR is urgent
       - name: Post to team channel (deduped)
         if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.targets.outputs.shouldChannelPost == 'true' }}
