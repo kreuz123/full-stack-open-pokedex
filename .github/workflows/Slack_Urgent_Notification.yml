@@ -2,9 +2,12 @@ name: Urgent PR Slack Notification
 
 on:
   pull_request:
-    types: [opened, labeled, synchronize]
-  workflow_dispatch:
-  
+    types: [opened, labeled, synchronize, review_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   notify_urgent:
     runs-on: ubuntu-latest
@@ -20,25 +23,115 @@ jobs:
         with:
           script: |
             const prNumber = Number(`${{ steps.pr.outputs.number }}`);
-            const pr = await github.rest.pulls.get({
+            const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
-
-            const labels = (pr.data.labels || []).map(l => (l.name || '').trim());
+            const labels = (pr.labels || []).map(l => (l.name || '').trim());
             core.info(`PR #${prNumber} labels: ${JSON.stringify(labels)}`);
 
             const hasUrgent = labels.some(n => n.toLowerCase().startsWith('urgent'));
             core.setOutput('hasUrgent', String(hasUrgent));
-            core.setOutput('url', pr.data.html_url);
-            core.setOutput('title', pr.data.title);
+            core.setOutput('prTitle', pr.title);
+            core.setOutput('prUrl', pr.html_url);
 
-      - name: Send Slack notification if urgent
-        if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
+      # Only take requested_reviewers; support CODEOWNERS auto-assigning at PR creation (retry up to 3 times)
+      - name: Collect reviewers (requested_reviewers only)
+        id: reviewers
+        uses: actions/github-script@v7
+        env:
+          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }} 
+        with:
+          script: |
+            const map = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
+            const action = context.payload.action;
+            const prNumber = Number(`${{ steps.pr.outputs.number }}`);
+
+            const fetchRequested = async () => {
+              const { data } = await github.rest.pulls.listRequestedReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              return (data.users || []).map(u => u.login);
+            };
+
+            let ghUsers = [];
+
+            if (action === 'review_requested' && context.payload.requested_reviewer) {
+              ghUsers = [context.payload.requested_reviewer.login];
+            } else {
+              const maxAttempts = 3;
+              for (let i = 1; i <= maxAttempts; i++) {
+                ghUsers = await fetchRequested();
+                if (ghUsers.length > 0) break;
+                await new Promise(r => setTimeout(r, 1000));
+              }
+            }
+
+            const uniq = [...new Set(ghUsers)];
+            core.info(`Requested reviewers (GH): ${JSON.stringify(uniq)}`);
+
+            const slackIds = uniq.map(u => map[u]).filter(Boolean);
+            if (uniq.length && !slackIds.length) {
+              core.warning('No Slack IDs mapped for requested reviewers. Check vars.SLACK_REVIEWER_MAP.');
+            }
+
+            const mentions = slackIds.map(id => `<@${id}>`).join(' ');
+
+            core.setOutput('mentions', mentions);
+            core.setOutput('slackIds', JSON.stringify(slackIds));
+            core.setOutput('hasReviewers', String(slackIds.length > 0));
+
+      # Team channel notification (with @mentions)
+      - name: Post to team channel if urgent
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.reviewers.outputs.hasReviewers == 'true' }}
         uses: slackapi/slack-github-action@v1.25.0
         with:
-          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}   
-          slack-message: "🚨 Urgent PR: <${{ steps.label_check.outputs.url }}|${{ steps.label_check.outputs.title }}> needs review within ASAP!"
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}   # C*/G*, make sure the bot is invited to the channel
+          slack-message: >
+            🚨 Urgent PR: <${{ steps.label_check.outputs.prUrl }}|${{ steps.label_check.outputs.prTitle }}>
+            needs review ASAP! ${{ steps.reviewers.outputs.mentions }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      # DM each reviewer
+      - name: DM each reviewer if urgent
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' && steps.reviewers.outputs.hasReviewers == 'true' }}
+        uses: actions/github-script@v7
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        with:
+          script: |
+            const token = process.env.SLACK_BOT_TOKEN;
+            const slackIds = JSON.parse(`${{ steps.reviewers.outputs.slackIds }}`);
+            const prUrl = `${{ steps.label_check.outputs.prUrl }}`;
+            const prTitle = `${{ steps.label_check.outputs.prTitle }}`;
+            const text = `🚨 Urgent PR: <${prUrl}|${prTitle}> needs your review ASAP.`;
+
+            for (const userId of slackIds) {
+              // Open DM
+              let res = await fetch('https://slack.com/api/conversations.open', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Authorization': `Bearer ${token}`
+                },
+                body: new URLSearchParams({ users: userId })
+              });
+              const opened = await res.json();
+              if (!opened.ok) { core.warning(`Open DM failed for ${userId}: ${JSON.stringify(opened)}`); continue; }
+
+              // Send message
+              res = await fetch('https://slack.com/api/chat.postMessage', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ channel: opened.channel.id, text })
+              });
+              const sent = await res.json();
+              if (!sent.ok) core.warning(`DM failed for ${userId}: ${JSON.stringify(sent)}`);
+            }
