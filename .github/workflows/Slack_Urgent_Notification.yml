@@ -21,10 +21,20 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber
             });
             const labels = (pr.labels || []).map(l => (l.name || '').trim());
-            const hasUrgent = labels.some(n => n.toLowerCase() === 'urgent');
+            let hasUrgent = labels.some(n => n.toLowerCase() === 'urgent');
+
+            // If this run is caused by "labeled" and the added label is urgent,
+            // treat it as urgent even if pulls.get() hasn't reflected it yet.
+            if (context.payload.action === 'labeled') {
+              const justAdded = (context.payload.label?.name || '').toLowerCase() === 'urgent';
+              if (justAdded) hasUrgent = true;
+            }
+
+            core.info(`Labels now: ${JSON.stringify(labels)} | hasUrgent=${hasUrgent}`);
             core.setOutput('hasUrgent', String(hasUrgent));
             core.setOutput('prTitle', pr.title);
             core.setOutput('prUrl', pr.html_url);
+
 
       # Decide who to notify and whether to post to channel
       - name: Compute targets & channel-post rule (dedup)
@@ -76,7 +86,6 @@ jobs:
             } else {
               shouldChannelPost = false;
             }
-          }
             const uniq = [...new Set(ghUsers)];
             const slackIds = uniq.map(u => map[u] || map[u?.toLowerCase?.()]).filter(Boolean);
             const mentions = slackIds.map(id => `<@${id}>`).join(' ');
