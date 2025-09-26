@@ -19,7 +19,10 @@ jobs:
           echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
           echo "created_at=${{ github.event.pull_request.created_at }}" >> $GITHUB_OUTPUT
           echo "has_urgent_label=${{ contains(github.event.pull_request.labels.*.name, 'urgent') }}" >> $GITHUB_OUTPUT
-          echo "reviewers=${{ toJson(github.event.pull_request.requested_reviewers.*.login) }}" >> $GITHUB_OUTPUT
+          # Comma-separated list of requested reviewers
+          REVIEWERS=$(printf "%s," ${{ github.event.pull_request.requested_reviewers.*.login }})
+          REVIEWERS="${REVIEWERS%,}" # Remove trailing comma
+          echo "reviewers=${REVIEWERS}" >> $GITHUB_OUTPUT
 
       # Step 2: Check if PR is urgent (simplified logic)
       - name: Check if urgent PR
@@ -64,100 +67,4 @@ jobs:
             if (action === 'review_requested') {
               // New review request: notify the newly requested reviewer
               const newReviewer = `${{ github.event.requested_reviewer.login }}`;
-              if (newReviewer && newReviewer !== '') {
-                targetUsers = [newReviewer];
-                shouldPostToChannel = true;
-              }
-            } else if (action === 'labeled') {
-              // Added urgent label: notify all current reviewers (from Step 1)
-              const reviewers = JSON.parse(`${{ steps.pr_info.outputs.reviewers }}`);
-              targetUsers = reviewers;
-
-              // De-duplication logic: for fresh PRs, only post to channel if no reviewers
-              const prAge = (Date.now() - new Date(prCreatedAt)) / 1000;
-              const isPrFresh = prAge < 60;
-              shouldPostToChannel = isPrFresh ? (targetUsers.length === 0) : true;
-
-              // DEBUG: Remove after testing
-              core.info(`Urgent label added to PR (age: ${Math.round(prAge)}s)`);
-              core.info(`Current reviewers: ${targetUsers.length}, Should post to channel: ${shouldPostToChannel}`);
-            }
-
-            // Map to Slack IDs
-            const slackIds = [...new Set(targetUsers)]
-              .map(user => reviewerMap[user] || reviewerMap[user?.toLowerCase()])
-              .filter(Boolean);
-
-            const mentions = slackIds.map(id => `<@${id}>`).join(' ');
-
-            core.setOutput('slackMentions', mentions);
-            core.setOutput('slackUserIds', JSON.stringify(slackIds));
-            core.setOutput('hasTargets', String(slackIds.length > 0));
-            core.setOutput('shouldPostToChannel', String(shouldPostToChannel));
-
-            // DEBUG: Remove after testing
-            core.info(`Event: ${action}, Targets: ${targetUsers.length} GitHub users → ${slackIds.length} Slack users, Channel: ${shouldPostToChannel}`);
-            return slackIds.length;
-
-      # Step 4: Post to Slack channel (using official Slack action)
-      - name: Post to Slack channel
-        if: |
-          steps.check_urgent.outputs.isUrgent == 'true' &&
-          steps.compute_targets.outputs.shouldPostToChannel == 'true'
-        uses: slackapi/slack-github-action@v1.25.0
-        with:
-          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
-          slack-message: >
-            🚨 Urgent PR: <${{ steps.pr_info.outputs.url }}|${{ steps.pr_info.outputs.title }}>
-            needs review ASAP! ${{ steps.compute_targets.outputs.hasTargets == 'true' && steps.compute_targets.outputs.slackMentions || '' }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      # Step 5: Send DMs to reviewers
-      - name: DM reviewers
-        if: |
-          steps.check_urgent.outputs.isUrgent == 'true' &&
-          steps.compute_targets.outputs.hasTargets == 'true'
-        uses: actions/github-script@v7
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        with:
-          script: |
-            const token = process.env.SLACK_BOT_TOKEN;
-            const slackIds = JSON.parse(`${{ steps.compute_targets.outputs.slackUserIds }}`);
-            const prUrl = `${{ steps.pr_info.outputs.url }}`;
-            const prTitle = `${{ steps.pr_info.outputs.title }}`;
-            const text = `🚨 Urgent PR: <${prUrl}|${prTitle}> needs your review ASAP.`;
-
-            for (const userId of slackIds) {
-              // Open DM
-              let res = await fetch('https://slack.com/api/conversations.open', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  'Authorization': `Bearer ${token}`
-                },
-                body: new URLSearchParams({ users: userId })
-              });
-              const opened = await res.json();
-              if (!opened.ok) {
-                core.warning(`Open DM failed for ${userId}: ${opened.error}`);
-                continue;
-              }
-
-              // Send message
-              res = await fetch('https://slack.com/api/chat.postMessage', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json; charset=utf-8',
-                  'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ channel: opened.channel.id, text })
-              });
-              const sent = await res.json();
-              if (!sent.ok) {
-                core.warning(`DM failed for ${userId}: ${sent.error}`);
-              } else {
-                core.info(`DM sent to ${userId}`);
-              }
-            }
+              if (new
