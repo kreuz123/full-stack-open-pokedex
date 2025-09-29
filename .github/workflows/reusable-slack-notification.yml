@@ -35,33 +35,37 @@ jobs:
           SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
         with:
           script: |
-            const token = process.env.SLACK_BOT_TOKEN;
-            const channelId = process.env.SLACK_CHANNEL_ID;
-            const reviewerMap = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
-            const targetUsers = `${{ inputs.target_users }}`.split(',').filter(Boolean);
+            const [token, channelId, reviewerMap, targetUsers] = [
+              process.env.SLACK_BOT_TOKEN,
+              process.env.SLACK_CHANNEL_ID,
+              JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}"),
+              `${{ inputs.target_users }}`.split(',').filter(Boolean)
+            ];
             
-            // Map to Slack IDs and create message
-            const slackIds = [...new Set(targetUsers)]
-              .map(user => reviewerMap[user] || reviewerMap[user?.toLowerCase()])
-              .filter(Boolean);
-            const mentions = slackIds.map(id => `<@${id}>`).join(' ');
+            // Categorize users
+            const slackIds = [], textUsers = [];
+            targetUsers.forEach(user => {
+              const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
+              id ? slackIds.push(id) : textUsers.push(user);
+            });
+            
+            const mentions = [...slackIds.map(id => `<@${id}>`), ...textUsers.map(u => `@${u}`)].join(' ');
             const message = `${{ inputs.message_template }}`;
-            
-            // Send notifications concurrently
             const notifications = [];
             
+            // Channel notification
             if (`${{ inputs.send_channel }}` === 'true') {
-              const channelMsg = slackIds.length > 0 ? `${message} ${mentions}` : message;
               notifications.push(
                 fetch('https://slack.com/api/chat.postMessage', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                  body: JSON.stringify({ channel: channelId, text: channelMsg })
+                  body: JSON.stringify({ channel: channelId, text: mentions ? `${message} ${mentions}` : message })
                 }).then(r => r.json()).then(r => core.info(r.ok ? 'Channel sent' : `Channel failed: ${r.error}`))
               );
             }
             
-            if (`${{ inputs.send_dm }}` === 'true' && slackIds.length > 0) {
+            // DM notifications
+            if (`${{ inputs.send_dm }}` === 'true') {
               slackIds.forEach(userId => {
                 notifications.push(
                   fetch('https://slack.com/api/chat.postMessage', {
@@ -74,4 +78,4 @@ jobs:
             }
             
             await Promise.allSettled(notifications);
-            core.info(`Processed ${targetUsers.length} users → ${slackIds.length} Slack notifications`);
+            core.info(`Processed ${targetUsers.length} users → ${slackIds.length} Slack tags + ${textUsers.length} text mentions`);
