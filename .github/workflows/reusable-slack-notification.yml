@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: Convert GitHub usernames to Slack mentions
         id: mention
-        uses: mheap/github-mention-to-slack@v1
+        uses: abeyuya/actions-mention-to-slack@v2        
         with:
           github-users: ${{ inputs.target_users }}
           mapping: ${{ secrets.SLACK_REVIEWER_MAP }}
