@@ -7,8 +7,15 @@ on:
 jobs:
   notify_urgent:
     runs-on: ubuntu-latest
+    outputs:
+      urgent: ${{ steps.check.outputs.urgent }}
+      users: ${{ steps.check.outputs.users }}
+      channel: ${{ steps.check.outputs.channel }}
+      dm: ${{ steps.check.outputs.dm }}
+    
     steps:
       - name: Check urgent and notify
+        id: check
         uses: actions/github-script@v7
         with:
           script: |
@@ -24,16 +31,34 @@ jobs:
             let sendChannel = false;
             let sendDM = false;
             
-            if (action === 'labeled' && `${{ github.event.label.name }}`.toLowerCase() === 'urgent') {
-              isUrgent = true;
-              targetUsers = isPrFresh ? '' : allReviewers;
-              sendChannel = isPrFresh ? !allReviewers : true;
-              sendDM = !isPrFresh && allReviewers;
-            } else if (action === 'review_requested' && hasUrgent && newReviewer) {
-              isUrgent = true;
-              targetUsers = newReviewer;
-              sendChannel = sendDM = true;
+            core.info(`Action: ${action}, HasUrgent: ${hasUrgent}, NewReviewer: ${newReviewer}, AllReviewers: ${allReviewers}, PrAge: ${Math.round(prAge)}s`);
+            
+            if (action === 'labeled') {
+              const newLabel = `${{ github.event.label.name }}`;
+              core.info(`New label: ${newLabel}`);
+              
+              if (newLabel.toLowerCase() === 'urgent') {
+                isUrgent = true;
+                if (isPrFresh) {
+                  targetUsers = '';
+                  sendChannel = allReviewers.length === 0;
+                  sendDM = false;
+                } else {
+                  targetUsers = allReviewers;
+                  sendChannel = true;
+                  sendDM = allReviewers.length > 0;
+                }
+              }
+            } else if (action === 'review_requested') {
+              if (hasUrgent && newReviewer) {
+                isUrgent = true;
+                targetUsers = newReviewer;
+                sendChannel = true;
+                sendDM = true;
+              }
             }
+            
+            core.info(`Result - Urgent: ${isUrgent}, Users: ${targetUsers}, Channel: ${sendChannel}, DM: ${sendDM}`);
             
             core.setOutput('urgent', isUrgent);
             core.setOutput('users', targetUsers);
@@ -42,13 +67,13 @@ jobs:
 
   call_notification:
     needs: notify_urgent
-    if: fromJSON(needs.notify_urgent.outputs.urgent)
+    if: needs.notify_urgent.outputs.urgent == 'true'
     uses: ./.github/workflows/reusable-slack-notification.yml
     with:
       message_template: "🚨 Urgent PR: <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}> needs review ASAP!"
       target_users: ${{ needs.notify_urgent.outputs.users }}
-      send_channel: ${{ fromJSON(needs.notify_urgent.outputs.channel) }}
-      send_dm: ${{ fromJSON(needs.notify_urgent.outputs.dm) }}
+      send_channel: ${{ needs.notify_urgent.outputs.channel == 'true' }}
+      send_dm: ${{ needs.notify_urgent.outputs.dm == 'true' }}
     secrets:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
