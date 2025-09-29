@@ -1,0 +1,70 @@
+name: Reusable Slack Notification
+
+on:
+  workflow_call:
+    inputs:
+      message_template:
+        required: true
+        type: string
+      target_users:
+        required: true
+        type: string
+      send_channel:
+        required: false
+        type: boolean
+        default: true
+      send_dm:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      SLACK_BOT_TOKEN:
+        required: true
+      SLACK_CHANNEL_ID:
+        required: true
+      SLACK_REVIEWER_MAP:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Convert GitHub usernames to Slack mentions
+        id: mention
+        uses: abeyuya/actions-mention-to-slack@v2        
+        with:
+          github-users: ${{ inputs.target_users }}
+          mapping: ${{ secrets.SLACK_REVIEWER_MAP }}
+
+      - name: Send Slack channel notification
+        if: ${{ inputs.send_channel == 'true' }}
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            ${{ inputs.message_template }} ${{ steps.mention.outputs.mentions }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Send Slack DMs
+        if: ${{ inputs.send_dm == 'true' && steps.mention.outputs.slack_ids != '' }}
+        uses: actions/github-script@v7
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        with:
+          script: |
+            const token = process.env.SLACK_BOT_TOKEN;
+            const slackIds = `${{ steps.mention.outputs.slack_ids }}`.split(',').filter(Boolean);
+            const message = `${{ inputs.message_template }}`;
+            const notifications = [];
+            slackIds.forEach(userId => {
+              notifications.push(
+                fetch('https://slack.com/api/chat.postMessage', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({ channel: userId, text: message })
+                }).then(r => r.json()).then(r => core.info(r.ok ? `DM sent to ${userId}` : `DM failed: ${r.error}`))
+              );
+            });
+            await Promise.allSettled(notifications);
+            core.info(`Processed ${slackIds.length} Slack DMs`);
