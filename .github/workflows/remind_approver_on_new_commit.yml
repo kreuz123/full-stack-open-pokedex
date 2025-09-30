@@ -7,7 +7,7 @@ on:
 jobs:
   notify-dismissed-reviewer:
     runs-on: ubuntu-latest
-    if: ${{ github.event.review.state == 'approved' && !endsWith(github.event.review.user.login, '[bot]') }}
+    if: ${{ !endsWith(github.event.review.user.login, '[bot]') }}
     steps:
       - name: Set Reviewer and PR URL
         id: setenv
