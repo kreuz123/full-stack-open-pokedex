@@ -4,6 +4,10 @@ on:
   pull_request_review:
     types: [dismissed]
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   notify-dismissed-reviewer:
     runs-on: ubuntu-latest
