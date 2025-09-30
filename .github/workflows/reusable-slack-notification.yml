@@ -29,12 +29,24 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Convert GitHub usernames to Slack mentions
+      - name: Prepare mentions
         id: mention
-        uses: abeyuya/actions-mention-to-slack@v2
+        uses: actions/github-script@v7
+        env:
+          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
         with:
-          github-users: ${{ inputs.target_users }}
-          mapping: ${{ secrets.SLACK_REVIEWER_MAP }}
+          script: |
+            const reviewerMap = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
+            const targetUsers = `${{ inputs.target_users }}`.split(',').map(u => u.trim()).filter(Boolean);
+            const slackIds = [];
+            const textUsers = [];
+            targetUsers.forEach(user => {
+              const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
+              id ? slackIds.push(id) : textUsers.push(user);
+            });
+            const mentions = [...slackIds.map(id => `<@${id}>`), ...textUsers.map(u => `@${u}`)].join(' ');
+            core.setOutput('mentions', mentions);
+            core.setOutput('slack_ids', slackIds.join(','));
 
       - name: Send Slack channel notification
         if: ${{ inputs.send_channel == 'true' }}
