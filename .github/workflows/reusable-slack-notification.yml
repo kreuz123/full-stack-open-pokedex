@@ -83,7 +83,7 @@ jobs:
                 console.log('Full response:', JSON.stringify(r, null, 2));
                 console.log('==================');
                 core.info(r.ok ? `DM sent to ${userId}` : `DM failed: ${r.error}`);
-                });
+                })
             });
             await Promise.allSettled(notifications);
             core.info(`Processed ${slackIds.length} Slack DMs`);
