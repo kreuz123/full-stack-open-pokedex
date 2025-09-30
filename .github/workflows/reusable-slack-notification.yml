@@ -75,7 +75,7 @@ jobs:
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ channel: userId, text: message })
               });
-              const json = await result.json();  // 修正：加上 await
+              const json = await result.json();  
               core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
             });
       
