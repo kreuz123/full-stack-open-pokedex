@@ -75,8 +75,15 @@ jobs:
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                   body: JSON.stringify({ channel: userId, text: message })
-                }).then(r => r.json()).then(r => core.info(r.ok ? `DM sent to ${userId}` : `DM failed: ${r.error}`))
-              );
+                }).then(r => r.json()).then(r => {
+                console.log('=== Debug Info ===');
+                console.log('r.ok exists:', 'ok' in r);
+                console.log('r.ok value:', r.ok);
+                console.log('r.ok type:', typeof r.ok);
+                console.log('Full response:', JSON.stringify(r, null, 2));
+                console.log('==================');
+                core.info(r.ok ? `DM sent to ${userId}` : `DM failed: ${r.error}`);
+                });
             });
             await Promise.allSettled(notifications);
             core.info(`Processed ${slackIds.length} Slack DMs`);
