@@ -13,12 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !endsWith(github.event.review.user.login, '[bot]') }}
     steps:
-      - name: Set Reviewer and PR URL
-        id: setenv
-        run: |
-          echo "reviewer_login=${{ github.event.review.user.login }}" >> $GITHUB_OUTPUT
-          echo "pr_url=${{ github.event.pull_request.html_url }}" >> $GITHUB_OUTPUT
-
       - name: Comment on PR to notify dismissed reviewer
         uses: peter-evans/create-or-update-comment@v4
         with:
