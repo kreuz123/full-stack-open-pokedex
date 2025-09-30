@@ -1,0 +1,82 @@
+name: Reusable Slack Notification
+
+on:
+  workflow_call:
+    inputs:
+      message_template:
+        required: true
+        type: string
+      target_users:
+        required: true
+        type: string
+      send_channel:
+        required: false
+        type: boolean
+        default: true
+      send_dm:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      SLACK_BOT_TOKEN:
+        required: true
+      SLACK_CHANNEL_ID:
+        required: true
+      SLACK_REVIEWER_MAP:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare mentions
+        id: mention
+        uses: actions/github-script@v7
+        env:
+          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
+        with:
+          script: |
+            const reviewerMap = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
+            const targetUsers = `${{ inputs.target_users }}`.split(',').map(u => u.trim()).filter(Boolean);
+            const slackIds = [];
+            const textUsers = [];
+            targetUsers.forEach(user => {
+              const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
+              id ? slackIds.push(id) : textUsers.push(user);
+            });
+            const mentions = [...slackIds.map(id => `<@${id}>`), ...textUsers.map(u => `@${u}`)].join(' ');
+            core.setOutput('mentions', mentions);
+            core.setOutput('slack_ids', slackIds.join(','));
+
+      - name: Send Slack channel notification
+        if: ${{ inputs.send_channel }}
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            ${{ inputs.message_template }} ${{ steps.mention.outputs.mentions }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Send Slack DMs
+        if: ${{ inputs.send_dm && steps.mention.outputs.slack_ids != '' }}
+        uses: actions/github-script@v7
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        with:
+          script: |
+            const token = process.env.SLACK_BOT_TOKEN;
+            const slackIds = `${{ steps.mention.outputs.slack_ids }}`.split(',').filter(Boolean);
+            const message = `${{ inputs.message_template }}`;
+      
+            slackIds.forEach(async (userId) => {
+              const result = await fetch('https://slack.com/api/chat.postMessage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ channel: userId, text: message })
+              });
+              const json = await result.json();  
+              core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
+            });
+      
+            core.info(`Processed ${slackIds.length} Slack DMs`);
