@@ -1,21 +1,32 @@
-name: Notify Dismissed Reviewer
+name: Notify Need Approval On PR Push (Only When Approved Exists)
 
 on:
-  pull_request_review:
-    types: [dismissed]
+  pull_request:
+    types: [synchronize]
 
 permissions:
   issues: write
   pull-requests: write
 
 jobs:
-  notify-dismissed-reviewer:
+  notify-need-approval:
     runs-on: ubuntu-latest
-    if: ${{ !endsWith(github.event.review.user.login, '[bot]') }}
     steps:
-      - name: Comment on PR to notify dismissed reviewer
+      - name: Check for approved review
+        id: approved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }} "
+          APPROVED_REVIEWER=$(gh api -H "Accept: application/vnd.github.v3+json" "/repos/$REPO/pulls/$PR_NUMBER/reviews" | jq -r '[.[] | select(.state=="APPROVED" and .user.login != null)] | last | .user.login // ""')
+          echo "approved_reviewer=$APPROVED_REVIEWER" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR to notify reviewer
+        if: ${{ steps.approved.outputs.approved_reviewer != '' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
-            @${{ github.event.review.user.login }} Your approval for this PR was dismissed by @${{ github.event.sender.login }}. Please review again!
+            @${{ steps.approved.outputs.approved_reviewer }} A new commit has been pushed to this PR. Please re-approve according to the repository ruleset!
+
