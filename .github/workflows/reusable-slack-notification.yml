@@ -68,23 +68,24 @@ jobs:
             const token = process.env.SLACK_BOT_TOKEN;
             const slackIds = `${{ steps.mention.outputs.slack_ids }}`.split(',').filter(Boolean);
             const message = `${{ inputs.message_template }}`;
-            const notifications = [];
-            slackIds.forEach(userId => {
-              notifications.push(
-                fetch('https://slack.com/api/chat.postMessage', {
+
+            for (const userId of slackIds) {
+              try {
+                const result = await fetch('https://slack.com/api/chat.postMessage', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  headers: { 
+                    'Content-Type': 'application/json', 
+                    'Authorization': `Bearer ${token}` 
+                  },
                   body: JSON.stringify({ channel: userId, text: message })
-                }).then(r => r.json()).then(r => {
-                console.log('=== Debug Info ===');
-                console.log('r.ok exists:', 'ok' in r);
-                console.log('r.ok value:', r.ok);
-                console.log('r.ok type:', typeof r.ok);
-                console.log('Full response:', JSON.stringify(r, null, 2));
-                console.log('==================');
-                core.info(r.ok ? `DM sent to ${userId}` : `DM failed: ${r.error}`);
-                })
-              );
-            });
-            await Promise.allSettled(notifications);
+                });
+          
+                const json = await result.json();
+                core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
+              } catch (error) {
+                core.error(`Failed to send DM to ${userId}: ${error.message}`);
+              }
+            }
+      
             core.info(`Processed ${slackIds.length} Slack DMs`);
+
