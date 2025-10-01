@@ -19,6 +19,7 @@ jobs:
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }} "
+          REPO="$(echo $REPO | tr -d ' ')"
           APPROVED_REVIEWER=$(gh api -H "Accept: application/vnd.github.v3+json" "/repos/$REPO/pulls/$PR_NUMBER/reviews" | jq -r '[.[] | select(.state=="APPROVED" and .user.login != null)] | last | .user.login // ""')
           echo "approved_reviewer=$APPROVED_REVIEWER" >> $GITHUB_OUTPUT
 
