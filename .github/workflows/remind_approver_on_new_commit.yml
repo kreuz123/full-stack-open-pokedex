@@ -18,43 +18,53 @@ jobs:
           script: |
             const prNumber = context.payload.pull_request.number;
             
-            // Get all reviews for this PR
+            // Get PR details to check requested reviewers
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            // Get all submitted reviews
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
             
-            console.log(`=== DEBUG: Found ${reviews.length} total reviews ===`);
+            console.log(`=== DEBUG INFO ===`);
+            console.log(`Requested reviewers: ${pr.requested_reviewers.map(r => r.login).join(', ')}`);
+            console.log(`Total reviews found: ${reviews.length}`);
             
-            // Log all reviews for debugging
-            reviews.forEach((review, index) => {
-              console.log(`Review ${index + 1}: ${review.user.login} - ${review.state} - ${review.submitted_at}`);
-            });
+            // Get latest review per user
+            const latestReviewsByUser = reviews
+              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
+              .reduce((acc, review) => {
+                acc[review.user.login] = review;
+                return acc;
+              }, {});
             
-            // Sort reviews chronologically and get latest per user
-            const sortedReviews = reviews.sort((a, b) => 
-              new Date(a.submitted_at) - new Date(b.submitted_at)
-            );
-            
-            const latestReviewsByUser = sortedReviews.reduce((acc, review) => {
-              console.log(`Processing: ${review.user.login} - ${review.state} - ${review.submitted_at}`);
-              acc[review.user.login] = review;
-              return acc;
-            }, {});
-            
-            console.log(`=== DEBUG: Latest review per user ===`);
+            // Show latest review states
+            console.log(`=== Latest review states ===`);
             Object.entries(latestReviewsByUser).forEach(([user, review]) => {
               console.log(`${user}: ${review.state} (${review.submitted_at})`);
             });
             
-            // Filter for current approvers (excluding bots)
+            // Get list of users who are currently requested to review
+            const requestedReviewerLogins = pr.requested_reviewers.map(r => r.login);
+            console.log(`=== Users with pending review requests ===`);
+            console.log(requestedReviewerLogins.join(', ') || 'None');
+            
+            // Find current approvers (exclude those with pending review requests)
             const currentApprovers = Object.values(latestReviewsByUser)
               .filter(review => {
                 const isApproved = review.state === 'APPROVED';
                 const isNotBot = !review.user.login.endsWith('[bot]');
-                console.log(`Filter check - ${review.user.login}: state=${review.state}, approved=${isApproved}, notBot=${isNotBot}`);
-                return isApproved && isNotBot;
+                const hasNoPendingRequest = !requestedReviewerLogins.includes(review.user.login);
+                
+                console.log(`${review.user.login}: approved=${isApproved}, notBot=${isNotBot}, noPendingRequest=${hasNoPendingRequest}`);
+                
+                return isApproved && isNotBot && hasNoPendingRequest;
               })
               .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
             
