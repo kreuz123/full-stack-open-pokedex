@@ -16,27 +16,60 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const prNumber = context.payload.pull_request.number;
+            
+            // Get all reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
+              pull_number: prNumber
             });
             
-            // Get latest review per user (sort first to ensure correct chronological order)
-            const latestReviews = reviews
-              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
-              .reduce((acc, review) => ({ ...acc, [review.user.login]: review }), {});
+            console.log(`=== DEBUG: Found ${reviews.length} total reviews ===`);
             
-            // Find current approvers (excluding bots)
-            const approvers = Object.values(latestReviews)
-              .filter(r => r.state === 'APPROVED' && !r.user.login.endsWith('[bot]'))
+            // Log all reviews for debugging
+            reviews.forEach((review, index) => {
+              console.log(`Review ${index + 1}: ${review.user.login} - ${review.state} - ${review.submitted_at}`);
+            });
+            
+            // Sort reviews chronologically and get latest per user
+            const sortedReviews = reviews.sort((a, b) => 
+              new Date(a.submitted_at) - new Date(b.submitted_at)
+            );
+            
+            const latestReviewsByUser = sortedReviews.reduce((acc, review) => {
+              console.log(`Processing: ${review.user.login} - ${review.state} - ${review.submitted_at}`);
+              acc[review.user.login] = review;
+              return acc;
+            }, {});
+            
+            console.log(`=== DEBUG: Latest review per user ===`);
+            Object.entries(latestReviewsByUser).forEach(([user, review]) => {
+              console.log(`${user}: ${review.state} (${review.submitted_at})`);
+            });
+            
+            // Filter for current approvers (excluding bots)
+            const currentApprovers = Object.values(latestReviewsByUser)
+              .filter(review => {
+                const isApproved = review.state === 'APPROVED';
+                const isNotBot = !review.user.login.endsWith('[bot]');
+                console.log(`Filter check - ${review.user.login}: state=${review.state}, approved=${isApproved}, notBot=${isNotBot}`);
+                return isApproved && isNotBot;
+              })
               .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
             
-            return approvers.length > 0 ? {
+            if (currentApprovers.length === 0) {
+              console.log('=== RESULT: No valid approvers found ===');
+              return { hasApprovals: false };
+            }
+            
+            console.log(`=== RESULT: Will notify ${currentApprovers[0].user.login} ===`);
+            
+            return {
               hasApprovals: true,
-              prNumber: context.payload.pull_request.number,
-              mostRecentApprover: approvers[0].user.login
-            } : { hasApprovals: false };
+              prNumber,
+              mostRecentApprover: currentApprovers[0].user.login
+            };
 
       - name: Comment on PR to notify stale reviewer
         if: fromJson(steps.find-approvers.outputs.result).hasApprovals
