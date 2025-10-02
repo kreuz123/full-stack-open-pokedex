@@ -1,39 +1,45 @@
-name: Notify Need Approval On PR Push (Only When Approved Exists)
+name: Notify Stale Reviewer
 
 on:
   pull_request:
     types: [synchronize]
 
 permissions:
-  issues: write
   pull-requests: write
 
 jobs:
-  notify-need-approval:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Check for approved review
-        id: approved
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }} "
-          REPO="$(echo $REPO | tr -d ' ')"
-          APPROVED_REVIEWERS=$(gh api -H "Accept: application/vnd.github.v3+json" "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-          | jq -r '
-            [group_by(.user.login)[] | last | select(.state=="APPROVED")] 
-            | map(.user.login) 
-            | unique 
-            | join(" ")
-          ')
-          echo "approved_reviewers=${APPROVED_REVIEWERS}" >> $GITHUB_OUTPUT
+      - name: Find last approver
+        id: approver
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr
+            });
 
-      - name: Comment on PR to notify reviewer
-        if: ${{ steps.approved.outputs.approved_reviewer != '' }}
+            const approvals = reviews
+              .filter(r => r.state === 'APPROVED' && !r.user.login.endsWith('[bot]'))
+              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+
+            if (approvals.length === 0) return core.setOutput('hasApproval', 'false');
+
+            core.setOutput('hasApproval', 'true');
+            core.setOutput('prNumber', pr);
+            core.setOutput('lastApprover', approvals[0].user.login);
+
+      - name: Notify reviewer
+        if: steps.approver.outputs.hasApproval == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.pull_request.number }}
+          issue-number: ${{ steps.approver.outputs.prNumber }}
           body: |
-            @${{ steps.approved.outputs.approved_reviewer }} A new commit has been pushed to this PR. Please check the merge panel to see if your review is stale, and re-approve if needed.
+            @${{ steps.approver.outputs.lastApprover }} A new commit has been pushed to this PR.  
+            Please review again if your approval became stale.
+
 
