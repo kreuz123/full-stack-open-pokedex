@@ -5,6 +5,7 @@ on:
     types: [synchronize]
 
 permissions:
+  issues: write
   pull-requests: write
 
 jobs:
@@ -17,59 +18,49 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            
+
             console.log(`Checking PR #${prNumber} for current approvals...`);
-            
+
             // Get reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
-            
-            console.log(`Found ${reviews.length} total reviews`);
-            
-            // Helper: Get latest review per user
-            const getLatestReviewsByUser = (reviews) => {
-              const reviewsByUser = {};
-              reviews.forEach(review => {
-                const username = review.user.login;
-                if (!reviewsByUser[username] || 
-                    new Date(review.submitted_at) > new Date(reviewsByUser[username].submitted_at)) {
-                  reviewsByUser[username] = review;
-                }
-              });
-              return reviewsByUser;
-            };
-            
-            const latestReviewsByUser = getLatestReviewsByUser(reviews);
-            
-            // Debug: Show latest review state for each user
-            Object.entries(latestReviewsByUser).forEach(([user, review]) => {
-              console.log(`${user}: latest review state = ${review.state} (${review.submitted_at})`);
+
+            // Group reviews by user and get the latest review for each user
+            const latestReviewsByUser = {};
+            reviews.forEach(review => {
+              const username = review.user.login;
+              if (!latestReviewsByUser[username] ||
+                  new Date(review.submitted_at) > new Date(latestReviewsByUser[username].submitted_at)) {
+                latestReviewsByUser[username] = review;
+              }
             });
-            
-            // Find users whose LATEST review is APPROVED (not any historical approval)
+
+            // Find users whose latest review is APPROVED
             const currentApprovers = Object.values(latestReviewsByUser)
-              .filter(review => {
-                const isApproved = review.state === 'APPROVED';
-                const isNotBot = !review.user.login.endsWith('[bot]');
-                console.log(`${review.user.login}: approved=${isApproved}, notBot=${isNotBot}`);
-                return isApproved && isNotBot;
-              })
+              .filter(review => review.state === 'APPROVED')
+              .filter(review => !review.user.login.endsWith('[bot]'))
               .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
-            
+
             if (currentApprovers.length === 0) {
               console.log('No current approvals found for this PR');
-              return { hasApprovals: false };
+              return {
+                hasApprovals: false
+              };
             }
-            
+
             console.log(`Current approvers: ${currentApprovers.map(r => r.user.login).join(', ')}`);
-            
+
+            // Get the most recent approver
+            const mostRecentApprover = currentApprovers[0].user.login;
+
             return {
               hasApprovals: true,
-              prNumber,
-              mostRecentApprover: currentApprovers[0].user.login
+              prNumber: prNumber,
+              mostRecentApprover: mostRecentApprover,
+              allApprovers: currentApprovers.map(r => r.user.login)
             };
 
       - name: Comment on PR to notify stale reviewer
