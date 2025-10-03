@@ -69,20 +69,22 @@ jobs:
             const slackIds = `${{ steps.mention.outputs.slack_ids }}`.split(',').filter(Boolean);
             const message = `${{ inputs.message_template }}`;
 
-            const notifications = slackIds.map(async (userId) => {
-              const result = await fetch('https://slack.com/api/chat.postMessage', {
-                method: 'POST',
-                headers: { 
-                  'Content-Type': 'application/json', 
-                  'Authorization': `Bearer ${token}` 
-                },
-                body: JSON.stringify({ channel: userId, text: message })
-              });
-        
-              const json = await result.json();
-              core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
-            });
+            for (const userId of slackIds) {
+              try {
+                const result = await fetch('https://slack.com/api/chat.postMessage', {
+                  method: 'POST',
+                  headers: { 
+                    'Content-Type': 'application/json', 
+                    'Authorization': `Bearer ${token}` 
+                  },
+                  body: JSON.stringify({ channel: userId, text: message })
+                });
+          
+                const json = await result.json();
+                core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
+              } catch (error) {
+                core.error(`Failed to send DM to ${userId}: ${error.message}`);
+              }
+            }
       
-            await Promise.allSettled(notifications);
             core.info(`Processed ${slackIds.length} Slack DMs`);
-
