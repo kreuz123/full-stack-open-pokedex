@@ -1,97 +1,58 @@
-name: Remind Approver On New Commit
+name: Notify Stale Reviewer
 
 on:
   pull_request:
-    types: [synchronize, reopened]
+    types: [synchronize]
 
 permissions:
-  contents: read
   pull-requests: write
 
 jobs:
-  remind-approver:
+  notify-stale-reviewer:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Find current approvers
+        id: find-approvers
+        uses: actions/github-script@v7
         with:
-          # Fetch only the latest commit history to speed up the job
-          fetch-depth: 1
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const requestedReviewers = context.payload.pull_request.requested_reviewers.map(r => r.login);
+            
+            // Get reviews for this PR
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            // Get latest review per user
+            const latestReviewsByUser = reviews
+              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
+              .reduce((acc, review) => {
+                acc[review.user.login] = review;
+                return acc;
+              }, {});
+            
+            // Find current approvers (exclude those with pending review requests)
+            const currentApprovers = Object.values(latestReviewsByUser)
+              .filter(review => 
+                review.state === 'APPROVED' && 
+                !review.user.login.endsWith('[bot]') &&
+                !requestedReviewers.includes(review.user.login)
+              )
+              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+            
+            return currentApprovers.length > 0 ? {
+              hasApprovals: true,
+              prNumber,
+              mostRecentApprover: currentApprovers[0].user.login
+            } : { hasApprovals: false };
 
-      - name: Print raw API output for debugging
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          echo "--- Raw API Output (reviews) ---"
-          gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100"
-          echo "--- Raw API Output (timeline) ---"
-          gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/issues/$PR_NUMBER/timeline?per_page=100"
-          echo "--- End of Raw API Output ---"
-
-      - name: Find dismissed approver after last push and notify
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          set -euo pipefail
-
-          # Step 1: Noise reduction — only remind if reviewDecision is still REQUIRED
-          REVIEW_DECISION=$(gh pr view "$PR_NUMBER" -R "$REPO" --json reviewDecision -q .reviewDecision || echo "")
-          if [ "$REVIEW_DECISION" != "REVIEW_REQUIRED" ]; then
-            echo "PR reviewDecision=$REVIEW_DECISION; no reminder needed."
-            exit 0
-          fi
-
-          # Step 2: Get the commit time of the last commit in the PR (robust with fallback)
-          # Try via gh pr view (GraphQL)
-          LAST_COMMIT_TIME=$(gh pr view "$PR_NUMBER" -R "$REPO" --json commits -q '.commits | select(length>0) | .[-1].committedDate' || echo "")
-
-          # Fallback via REST if empty/null
-          if [ -z "$LAST_COMMIT_TIME" ] || [ "$LAST_COMMIT_TIME" = "null" ]; then
-            COMMITS_JSON=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/pulls/$PR_NUMBER/commits?per_page=250")
-            # Prefer committer.date; if missing, use author.date
-            LAST_COMMIT_TIME=$(echo "$COMMITS_JSON" | jq -r '
-              if length > 0 then
-                .[-1].commit.committer.date // .[-1].commit.author.date // empty
-              else empty end
-            ')
-          fi
-
-          if [ -z "$LAST_COMMIT_TIME" ] || [ "$LAST_COMMIT_TIME" = "null" ]; then
-            echo "Cannot determine last commit time; skipping."
-            exit 0
-          fi
-          echo "Last commit time: $LAST_COMMIT_TIME"
-
-          # Step 3: Use the timeline API to detect review_dismissed events after the last commit
-          TIMELINE_JSON=$(gh api -H "Accept: application/vnd.github+json" "/repos/$REPO/issues/$PR_NUMBER/timeline?per_page=100")
-
-          DISMISSED_LOGIN=$(echo "$TIMELINE_JSON" | jq -r --arg t "$LAST_COMMIT_TIME" '
-            [ .[]
-              | select(.event == "review_dismissed")
-              | select(.created_at > $t)
-            ]
-            | sort_by(.created_at)
-            | last
-            | .dismissed_review.user.login // empty
-          ')
-
-          if [ -z "$DISMISSED_LOGIN" ]; then
-            echo "No review_dismissed event after last push; skipping."
-            exit 0
-          fi
-
-          # Step 4: Skip if the dismissed reviewer is a bot
-          if [[ "$DISMISSED_LOGIN" =~ \[bot\]$ ]]; then
-            echo "Dismissed reviewer is a bot ($DISMISSED_LOGIN); skipping."
-            exit 0
-          fi
-
-          # Step 5: Notify the dismissed reviewer with a PR comment
-          echo "Notifying @$DISMISSED_LOGIN ..."
-          gh pr comment "$PR_NUMBER" -R "$REPO" \
-            --body "@$DISMISSED_LOGIN New commits have been pushed and your previous approval was dismissed. Please review again. $PR_URL"
+      - name: Comment on PR to notify stale reviewer
+        if: fromJson(steps.find-approvers.outputs.result).hasApprovals
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ fromJson(steps.find-approvers.outputs.result).prNumber }}
+          body: |
+            @${{ fromJson(steps.find-approvers.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
