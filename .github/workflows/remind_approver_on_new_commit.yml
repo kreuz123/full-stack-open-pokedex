@@ -18,17 +18,15 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const prNumber = pr.number;
-            // 取得所有人類 reviewer
             const requestedReviewers = pr.requested_reviewers.map(r => r.login).filter(r => !r.endsWith('[bot]'));
 
-            // 取得所有 review
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
 
-            // 每人最新一筆 review
+            // Get latest review per user
             const latestReviewsByUser = reviews
               .filter(r => r.user && r.user.login)
               .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
@@ -37,7 +35,10 @@ jobs:
                 return acc;
               }, {});
 
-            // 檢查 requested reviewers 的最新 review 是否都是 APPROVED
+            // DEBUG: 印出 reviewer 狀態
+            console.log('requestedReviewers:', requestedReviewers);
+            console.log('latestReviewsByUser:', latestReviewsByUser);
+
             let allRequestedApproved = true;
             let lastApprovedReviewer = null;
             let lastApprovedTime = 0;
@@ -48,7 +49,6 @@ jobs:
                 allRequestedApproved = false;
                 break;
               }
-              // 找出最新 approve 的 reviewer
               const submitted = new Date(review.submitted_at).getTime();
               if (submitted > lastApprovedTime) {
                 lastApprovedTime = submitted;
@@ -59,13 +59,12 @@ jobs:
             return (allRequestedApproved && lastApprovedReviewer) ? {
               hasApprovals: true,
               prNumber,
-              mostRecentApprover: lastApprovedReviewer
-            } : { hasApprovals: false };
-
-      - name: Comment on PR to notify stale reviewer
-        if: fromJson(steps.find-approvers.outputs.result).hasApprovals
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ fromJson(steps.find-approvers.outputs.result).prNumber }}
-          body: |
-            @${{ fromJson(steps.find-approvers.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
+              mostRecentApprover: lastApprovedReviewer,
+              debug: {
+                requestedReviewers,
+                latestReviewsByUser
+              }
+            } : { hasApprovals: false, debug: {
+                requestedReviewers,
+                latestReviewsByUser
+              } };
