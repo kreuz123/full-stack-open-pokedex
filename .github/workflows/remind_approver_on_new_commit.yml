@@ -1,4 +1,4 @@
-name: Notify Latest Approver
+name: Notify Stale Reviewer
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  notify-latest-approver:
+  notify-stale-reviewer:
     runs-on: ubuntu-latest
     steps:
       - name: Find current approvers
@@ -16,33 +16,47 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const pr = context.payload.pull_request;
-            const prNumber = pr.number;
-
+            const prNumber = context.payload.pull_request.number;
+            const requestedReviewers = context.payload.pull_request.requested_reviewers.map(r => r.login);
+            
+            // Get reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
-
-            // Filter out all approved reviewers, exclude bots
-            const approvedReviews = reviews.filter(r => r.state === 'APPROVED' && r.user && r.user.login && !r.user.login.endsWith('[bot]'));
-
-            if (approvedReviews.length === 0) {
-              return { hasApprovals: false };
-            }
-
-            // Get the most recent approver
-            approvedReviews.sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
-            const latest = approvedReviews[approvedReviews.length - 1];
-            const reviewer = latest.user.login;
-
-            return {
+            
+            // Get latest review per user
+            const latestReviewsByUser = reviews
+              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
+              .reduce((acc, review) => {
+                acc[review.user.login] = review;
+                return acc;
+              }, {});
+            
+            // Find current approvers (exclude those with pending review requests)
+            const currentApprovers = Object.values(latestReviewsByUser)
+              .filter(review => 
+                review.state === 'APPROVED' && 
+                !review.user.login.endsWith('[bot]') &&
+                !requestedReviewers.includes(review.user.login)
+              )
+              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+            
+            // Check if all reviewers have approved (no pending human reviewers)
+            const hasPendingHumanReviewers = requestedReviewers.some(reviewer => 
+              !reviewer.endsWith('[bot]')
+            );
+            
+            const allReviewersApproved = currentApprovers.length > 0 && !hasPendingHumanReviewers;
+            
+            return allReviewersApproved ? {
               hasApprovals: true,
               prNumber,
-              mostRecentApprover: reviewer
-            };
-      - name: Comment on PR to notify stale reviewer
+              mostRecentApprover: currentApprovers[0].user.login
+            } : { hasApprovals: false };
+
+      - name: Comment on PR to notify stale reviewers
         if: fromJson(steps.find-approvers.outputs.result).hasApprovals
         uses: peter-evans/create-or-update-comment@v4
         with:
