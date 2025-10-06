@@ -17,9 +17,7 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            const requestedReviewers = context.payload.pull_request.requested_reviewers.map(r => r.login);
             
-            // Get reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -27,34 +25,32 @@ jobs:
             });
             
             // Get latest review per user
-            const latestReviewsByUser = reviews
-              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
-              .reduce((acc, review) => {
-                acc[review.user.login] = review;
-                return acc;
-              }, {});
+            const latestReviewsByUser = reviews.reduce((acc, review) => {
+              acc[review.user.login] = review;
+              return acc;
+            }, {});
             
-            // Find current approvers (exclude those with pending review requests)
-            const currentApprovers = Object.values(latestReviewsByUser)
-              .filter(review => 
-                review.state === 'APPROVED' && 
-                !review.user.login.endsWith('[bot]') &&
-                !requestedReviewers.includes(review.user.login)
-              )
-              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+            // Get all human reviewers (exclude bots)
+            const humanReviewers = Object.values(latestReviewsByUser)
+              .filter(review => !review.user.login.endsWith('[bot]'));
             
-            // Check if all reviewers have approved (no pending human reviewers)
-            const hasPendingHumanReviewers = requestedReviewers.some(reviewer => 
-              !reviewer.endsWith('[bot]')
-            );
+            // Check if ALL human reviewers have approved
+            const allApproved = humanReviewers.length > 0 && 
+                               humanReviewers.every(review => review.state === 'APPROVED');
             
-            const allReviewersApproved = currentApprovers.length > 0 && !hasPendingHumanReviewers;
+            if (allApproved) {
+              // Find most recent approver
+              const mostRecentApprover = humanReviewers
+                .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))[0];
+              
+              return {
+                hasApprovals: true,
+                prNumber,
+                mostRecentApprover: mostRecentApprover.user.login
+              };
+            }
             
-            return allReviewersApproved ? {
-              hasApprovals: true,
-              prNumber,
-              mostRecentApprover: currentApprovers[0].user.login
-            } : { hasApprovals: false };
+            return { hasApprovals: false };
 
       - name: Comment on PR to notify stale reviewers
         if: fromJson(steps.find-approvers.outputs.result).hasApprovals
