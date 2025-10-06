@@ -11,16 +11,14 @@ jobs:
   notify-stale-reviewer:
     runs-on: ubuntu-latest
     steps:
-      - name: Find current approval status
-        id: find-approval-status
+      - name: Find current approvers
+        id: find-approvers
         uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
             const prNumber = pr.number;
-
-            // Get requested reviewers and teams
-            const requestedReviewers = pr.requested_reviewers.map(r => r.login);
+            const requestedReviewers = pr.requested_reviewers.map(r => r.login).filter(r => !r.endsWith('[bot]'));
 
             // Get reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
@@ -38,40 +36,34 @@ jobs:
                 return acc;
               }, {});
 
-            // All reviewers (from latest review or requested reviewers)
-            const allReviewers = new Set([
-              ...Object.keys(latestReviewsByUser),
-              ...requestedReviewers
-            ]);
+            // 檢查每個 requested reviewer 的最新 review 是否都是 APPROVED
+            let allRequestedApproved = true;
+            for (const reviewer of requestedReviewers) {
+              const review = latestReviewsByUser[reviewer];
+              if (!review || review.state !== 'APPROVED') {
+                allRequestedApproved = false;
+                break;
+              }
+            }
 
-            // Exclude bots
-            const humanReviewers = Array.from(allReviewers).filter(r => !r.endsWith('[bot]'));
-
-            // Check which reviewers have APPROVED
-            const approvedReviewers = Object.values(latestReviewsByUser)
-              .filter(review => review.state === 'APPROVED')
-              .map(review => review.user.login);
-
-            // All human reviewers are approved?
-            const allApproved = humanReviewers.every(r => approvedReviewers.includes(r));
-
-            // Most recent approver
-            const mostRecentApprover = approvedReviewers.length > 0 ?
-              Object.values(latestReviewsByUser)
-                .filter(r => approvedReviewers.includes(r.user.login))
-                .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))[0].user.login
-              : null;
-
-            return {
-              allApproved,
+            // 找出最近一次 APPROVED 的 reviewer
+            const currentApprovers = Object.values(latestReviewsByUser)
+              .filter(review => 
+                review.state === 'APPROVED' && 
+                !review.user.login.endsWith('[bot]')
+              )
+              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+            
+            return (currentApprovers.length > 0 && allRequestedApproved) ? {
+              hasApprovals: true,
               prNumber,
-              mostRecentApprover
-            };
+              mostRecentApprover: currentApprovers[0].user.login
+            } : { hasApprovals: false };
 
       - name: Comment on PR to notify stale reviewer
-        if: fromJson(steps.find-approval-status.outputs.result).allApproved
+        if: fromJson(steps.find-approvers.outputs.result).hasApprovals
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ fromJson(steps.find-approval-status.outputs.result).prNumber }}
+          issue-number: ${{ fromJson(steps.find-approvers.outputs.result).prNumber }}
           body: |
-            @${{ fromJson(steps.find-approval-status.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
+            @${{ fromJson(steps.find-approvers.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
