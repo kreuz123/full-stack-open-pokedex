@@ -19,17 +19,6 @@ jobs:
             const prNumber = context.payload.pull_request.number;
             const requestedReviewers = context.payload.pull_request.requested_reviewers.map(r => r.login);
             
-            console.log(`=== DEBUG INFO ===`);
-            console.log(`PR Number: ${prNumber}`);
-            console.log(`Current Requested Reviewers: ${JSON.stringify(requestedReviewers)}`);
-            
-            // Get all review requests (including past ones)
-            const { data: reviewRequests } = await github.rest.pulls.listRequestedReviewers({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
-            
             // Get timeline to find who was ever requested as reviewer
             const { data: timeline } = await github.rest.issues.listEventsForTimeline({
               owner: context.repo.owner,
@@ -38,17 +27,12 @@ jobs:
             });
             
             // Find all users who were ever requested for review
-            const allEverRequestedReviewers = new Set();
+            const allEverRequestedReviewers = new Set(requestedReviewers);
             timeline.forEach(event => {
               if (event.event === 'review_requested' && event.requested_reviewer) {
                 allEverRequestedReviewers.add(event.requested_reviewer.login);
               }
             });
-            
-            // Add current requested reviewers
-            requestedReviewers.forEach(reviewer => allEverRequestedReviewers.add(reviewer));
-            
-            console.log(`All users ever requested for review: ${Array.from(allEverRequestedReviewers)}`);
             
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
@@ -56,20 +40,11 @@ jobs:
               pull_number: prNumber
             });
             
-            console.log(`Total reviews found: ${reviews.length}`);
-            
             // Get latest review per user
             const latestReviewsByUser = reviews.reduce((acc, review) => {
               acc[review.user.login] = review;
               return acc;
             }, {});
-            
-            console.log(`Latest reviews by user:`);
-            Object.keys(latestReviewsByUser).forEach(user => {
-              const review = latestReviewsByUser[user];
-              const isReviewer = allEverRequestedReviewers.has(user);
-              console.log(`  - ${user}: ${review.state} (${review.submitted_at}) [Reviewer: ${isReviewer}]`);
-            });
             
             // Only check reviews from actual reviewers
             const reviewerOnlyReviews = Object.values(latestReviewsByUser)
@@ -78,42 +53,20 @@ jobs:
                 allEverRequestedReviewers.has(review.user.login)
               );
             
-            console.log(`Reviews from actual reviewers:`, reviewerOnlyReviews.map(r => `${r.user.login}: ${r.state}`));
-            
-            // Find current approvers (only from actual reviewers)
+            // Find current approvers
             const currentApprovers = reviewerOnlyReviews
               .filter(review => review.state === 'APPROVED')
               .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
             
-            console.log(`Current approvers: ${currentApprovers.map(r => r.user.login)}`);
-            
-            // Check for any blocking reviews (only from actual reviewers)
-            const hasChangesRequested = reviewerOnlyReviews
-              .some(review => review.state === 'CHANGES_REQUESTED');
-            
-            const hasOnlyCommented = reviewerOnlyReviews
-              .some(review => review.state === 'COMMENTED');
-            
-            const hasPendingHumanReviewers = requestedReviewers.some(reviewer => 
-              !reviewer.endsWith('[bot]')
-            );
-            
-            console.log(`=== CONDITION CHECKS ===`);
-            console.log(`Has approvers: ${currentApprovers.length > 0}`);
-            console.log(`Has pending human reviewers: ${hasPendingHumanReviewers}`);
-            console.log(`Has changes requested (from reviewers): ${hasChangesRequested}`);
-            console.log(`Has only commented (from reviewers): ${hasOnlyCommented}`);
+            // Check for blocking conditions
+            const hasChangesRequested = reviewerOnlyReviews.some(review => review.state === 'CHANGES_REQUESTED');
+            const hasOnlyCommented = reviewerOnlyReviews.some(review => review.state === 'COMMENTED');
+            const hasPendingHumanReviewers = requestedReviewers.some(reviewer => !reviewer.endsWith('[bot]'));
             
             const allReviewersApproved = currentApprovers.length > 0 && 
                                        !hasPendingHumanReviewers && 
                                        !hasChangesRequested &&
                                        !hasOnlyCommented;
-            
-            console.log(`All reviewers approved (final result): ${allReviewersApproved}`);
-            
-            if (allReviewersApproved) {
-              console.log(`Most recent approver: ${currentApprovers[0].user.login}`);
-            }
             
             return allReviewersApproved ? {
               hasApprovals: true,
