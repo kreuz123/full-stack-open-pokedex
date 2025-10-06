@@ -11,48 +11,67 @@ jobs:
   notify-stale-reviewer:
     runs-on: ubuntu-latest
     steps:
-      - name: Find current approvers
-        id: find-approvers
+      - name: Find current approval status
+        id: find-approval-status
         uses: actions/github-script@v7
         with:
           script: |
-            const prNumber = context.payload.pull_request.number;
-            const requestedReviewers = context.payload.pull_request.requested_reviewers.map(r => r.login);
-            
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+
+            // Get requested reviewers and teams
+            const requestedReviewers = pr.requested_reviewers.map(r => r.login);
+
             // Get reviews for this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
-            
+
             // Get latest review per user
             const latestReviewsByUser = reviews
+              .filter(r => r.user && r.user.login)
               .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
               .reduce((acc, review) => {
                 acc[review.user.login] = review;
                 return acc;
               }, {});
-            
-            // Find current approvers (exclude those with pending review requests)
-            const currentApprovers = Object.values(latestReviewsByUser)
-              .filter(review => 
-                review.state === 'APPROVED' && 
-                !review.user.login.endsWith('[bot]') &&
-                !requestedReviewers.includes(review.user.login)
-              )
-              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
-            
-            return currentApprovers.length > 0 ? {
-              hasApprovals: true,
+
+            // All reviewers (from latest review or requested reviewers)
+            const allReviewers = new Set([
+              ...Object.keys(latestReviewsByUser),
+              ...requestedReviewers
+            ]);
+
+            // Exclude bots
+            const humanReviewers = Array.from(allReviewers).filter(r => !r.endsWith('[bot]'));
+
+            // Check which reviewers have APPROVED
+            const approvedReviewers = Object.values(latestReviewsByUser)
+              .filter(review => review.state === 'APPROVED')
+              .map(review => review.user.login);
+
+            // All human reviewers are approved?
+            const allApproved = humanReviewers.every(r => approvedReviewers.includes(r));
+
+            // Most recent approver
+            const mostRecentApprover = approvedReviewers.length > 0 ?
+              Object.values(latestReviewsByUser)
+                .filter(r => approvedReviewers.includes(r.user.login))
+                .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))[0].user.login
+              : null;
+
+            return {
+              allApproved,
               prNumber,
-              mostRecentApprover: currentApprovers[0].user.login
-            } : { hasApprovals: false };
+              mostRecentApprover
+            };
 
       - name: Comment on PR to notify stale reviewer
-        if: fromJson(steps.find-approvers.outputs.result).hasApprovals
+        if: fromJson(steps.find-approval-status.outputs.result).allApproved
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ fromJson(steps.find-approvers.outputs.result).prNumber }}
+          issue-number: ${{ fromJson(steps.find-approval-status.outputs.result).prNumber }}
           body: |
-            @${{ fromJson(steps.find-approvers.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
+            @${{ fromJson(steps.find-approval-status.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
