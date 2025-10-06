@@ -1,4 +1,4 @@
-name: Notify Stale Reviewer
+name: Notify Latest Approver
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  notify-stale-reviewer:
+  notify-latest-approver:
     runs-on: ubuntu-latest
     steps:
       - name: Find current approvers
@@ -18,7 +18,6 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const prNumber = pr.number;
-            const requestedReviewers = pr.requested_reviewers.map(r => r.login).filter(r => !r.endsWith('[bot]'));
 
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
@@ -26,45 +25,27 @@ jobs:
               pull_number: prNumber
             });
 
-            // Get latest review per user
-            const latestReviewsByUser = reviews
-              .filter(r => r.user && r.user.login)
-              .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
-              .reduce((acc, review) => {
-                acc[review.user.login] = review;
-                return acc;
-              }, {});
+            // Filter out all approved reviewers, exclude bots
+            const approvedReviews = reviews.filter(r => r.state === 'APPROVED' && r.user && r.user.login && !r.user.login.endsWith('[bot]'));
 
-            // DEBUG: 印出 reviewer 狀態
-            console.log('requestedReviewers:', requestedReviewers);
-            console.log('latestReviewsByUser:', latestReviewsByUser);
-
-            let allRequestedApproved = true;
-            let lastApprovedReviewer = null;
-            let lastApprovedTime = 0;
-
-            for (const reviewer of requestedReviewers) {
-              const review = latestReviewsByUser[reviewer];
-              if (!review || review.state !== 'APPROVED') {
-                allRequestedApproved = false;
-                break;
-              }
-              const submitted = new Date(review.submitted_at).getTime();
-              if (submitted > lastApprovedTime) {
-                lastApprovedTime = submitted;
-                lastApprovedReviewer = reviewer;
-              }
+            if (approvedReviews.length === 0) {
+              return { hasApprovals: false };
             }
 
-            return (allRequestedApproved && lastApprovedReviewer) ? {
+            // Get the most recent approver
+            approvedReviews.sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
+            const latest = approvedReviews[approvedReviews.length - 1];
+            const reviewer = latest.user.login;
+
+            return {
               hasApprovals: true,
               prNumber,
-              mostRecentApprover: lastApprovedReviewer,
-              debug: {
-                requestedReviewers,
-                latestReviewsByUser
-              }
-            } : { hasApprovals: false, debug: {
-                requestedReviewers,
-                latestReviewsByUser
-              } };
+              mostRecentApprover: reviewer
+            };
+      - name: Comment on PR to notify stale reviewer
+        if: fromJson(steps.find-approvers.outputs.result).hasApprovals
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ fromJson(steps.find-approvers.outputs.result).prNumber }}
+          body: |
+            @${{ fromJson(steps.find-approvers.outputs.result).mostRecentApprover }} A new commit has been pushed to this PR. Please review again if your review appears stale and merging is blocked.
