@@ -24,19 +24,35 @@ jobs:
               pull_number: prNumber
             });
             
+            console.log(`Total reviews: ${reviews.length}`);
+            
             // Get latest review per user
             const latestReviewsByUser = reviews.reduce((acc, review) => {
               acc[review.user.login] = review;
               return acc;
             }, {});
             
+            console.log('Latest reviews by user:', Object.keys(latestReviewsByUser).map(user => ({
+              user,
+              state: latestReviewsByUser[user].state,
+              submitted_at: latestReviewsByUser[user].submitted_at
+            })));
+            
             // Get all human reviewers (exclude bots)
             const humanReviewers = Object.values(latestReviewsByUser)
               .filter(review => !review.user.login.endsWith('[bot]'));
             
+            console.log(`Human reviewers count: ${humanReviewers.length}`);
+            console.log('Human reviewers states:', humanReviewers.map(r => ({
+              user: r.user.login,
+              state: r.state
+            })));
+            
             // Check if ALL human reviewers have approved
             const allApproved = humanReviewers.length > 0 && 
                                humanReviewers.every(review => review.state === 'APPROVED');
+            
+            console.log(`All approved: ${allApproved}`);
             
             if (allApproved) {
               // Find most recent approver
