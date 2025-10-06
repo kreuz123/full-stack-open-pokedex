@@ -21,7 +21,34 @@ jobs:
             
             console.log(`=== DEBUG INFO ===`);
             console.log(`PR Number: ${prNumber}`);
-            console.log(`Requested Reviewers: ${JSON.stringify(requestedReviewers)}`);
+            console.log(`Current Requested Reviewers: ${JSON.stringify(requestedReviewers)}`);
+            
+            // Get all review requests (including past ones)
+            const { data: reviewRequests } = await github.rest.pulls.listRequestedReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            // Get timeline to find who was ever requested as reviewer
+            const { data: timeline } = await github.rest.issues.listEventsForTimeline({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            
+            // Find all users who were ever requested for review
+            const allEverRequestedReviewers = new Set();
+            timeline.forEach(event => {
+              if (event.event === 'review_requested' && event.requested_reviewer) {
+                allEverRequestedReviewers.add(event.requested_reviewer.login);
+              }
+            });
+            
+            // Add current requested reviewers
+            requestedReviewers.forEach(reviewer => allEverRequestedReviewers.add(reviewer));
+            
+            console.log(`All users ever requested for review: ${Array.from(allEverRequestedReviewers)}`);
             
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
@@ -40,31 +67,32 @@ jobs:
             console.log(`Latest reviews by user:`);
             Object.keys(latestReviewsByUser).forEach(user => {
               const review = latestReviewsByUser[user];
-              console.log(`  - ${user}: ${review.state} (${review.submitted_at})`);
+              const isReviewer = allEverRequestedReviewers.has(user);
+              console.log(`  - ${user}: ${review.state} (${review.submitted_at}) [Reviewer: ${isReviewer}]`);
             });
             
-            // Find current approvers
-            const currentApprovers = Object.values(latestReviewsByUser)
+            // Only check reviews from actual reviewers
+            const reviewerOnlyReviews = Object.values(latestReviewsByUser)
               .filter(review => 
-                review.state === 'APPROVED' && 
-                !review.user.login.endsWith('[bot]')
-              )
+                !review.user.login.endsWith('[bot]') &&
+                allEverRequestedReviewers.has(review.user.login)
+              );
+            
+            console.log(`Reviews from actual reviewers:`, reviewerOnlyReviews.map(r => `${r.user.login}: ${r.state}`));
+            
+            // Find current approvers (only from actual reviewers)
+            const currentApprovers = reviewerOnlyReviews
+              .filter(review => review.state === 'APPROVED')
               .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
             
             console.log(`Current approvers: ${currentApprovers.map(r => r.user.login)}`);
             
-            // Check for any blocking reviews
-            const hasChangesRequested = Object.values(latestReviewsByUser)
-              .some(review => 
-                review.state === 'CHANGES_REQUESTED' && 
-                !review.user.login.endsWith('[bot]')
-              );
+            // Check for any blocking reviews (only from actual reviewers)
+            const hasChangesRequested = reviewerOnlyReviews
+              .some(review => review.state === 'CHANGES_REQUESTED');
             
-            const hasOnlyCommented = Object.values(latestReviewsByUser)
-              .some(review => 
-                review.state === 'COMMENTED' && 
-                !review.user.login.endsWith('[bot]')
-              );
+            const hasOnlyCommented = reviewerOnlyReviews
+              .some(review => review.state === 'COMMENTED');
             
             const hasPendingHumanReviewers = requestedReviewers.some(reviewer => 
               !reviewer.endsWith('[bot]')
@@ -73,8 +101,8 @@ jobs:
             console.log(`=== CONDITION CHECKS ===`);
             console.log(`Has approvers: ${currentApprovers.length > 0}`);
             console.log(`Has pending human reviewers: ${hasPendingHumanReviewers}`);
-            console.log(`Has changes requested: ${hasChangesRequested}`);
-            console.log(`Has only commented: ${hasOnlyCommented}`);
+            console.log(`Has changes requested (from reviewers): ${hasChangesRequested}`);
+            console.log(`Has only commented (from reviewers): ${hasOnlyCommented}`);
             
             const allReviewersApproved = currentApprovers.length > 0 && 
                                        !hasPendingHumanReviewers && 
