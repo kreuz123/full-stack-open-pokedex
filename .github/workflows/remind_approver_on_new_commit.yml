@@ -18,16 +18,17 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const prNumber = pr.number;
+            // 取得所有人類 reviewer
             const requestedReviewers = pr.requested_reviewers.map(r => r.login).filter(r => !r.endsWith('[bot]'));
 
-            // Get reviews for this PR
+            // 取得所有 review
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber
             });
 
-            // Get latest review per user
+            // 每人最新一筆 review
             const latestReviewsByUser = reviews
               .filter(r => r.user && r.user.login)
               .sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at))
@@ -36,28 +37,29 @@ jobs:
                 return acc;
               }, {});
 
-            // 檢查每個 requested reviewer 的最新 review 是否都是 APPROVED
+            // 檢查 requested reviewers 的最新 review 是否都是 APPROVED
             let allRequestedApproved = true;
+            let lastApprovedReviewer = null;
+            let lastApprovedTime = 0;
+
             for (const reviewer of requestedReviewers) {
               const review = latestReviewsByUser[reviewer];
               if (!review || review.state !== 'APPROVED') {
                 allRequestedApproved = false;
                 break;
               }
+              // 找出最新 approve 的 reviewer
+              const submitted = new Date(review.submitted_at).getTime();
+              if (submitted > lastApprovedTime) {
+                lastApprovedTime = submitted;
+                lastApprovedReviewer = reviewer;
+              }
             }
 
-            // 找出最近一次 APPROVED 的 reviewer
-            const currentApprovers = Object.values(latestReviewsByUser)
-              .filter(review => 
-                review.state === 'APPROVED' && 
-                !review.user.login.endsWith('[bot]')
-              )
-              .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
-            
-            return (currentApprovers.length > 0 && allRequestedApproved) ? {
+            return (allRequestedApproved && lastApprovedReviewer) ? {
               hasApprovals: true,
               prNumber,
-              mostRecentApprover: currentApprovers[0].user.login
+              mostRecentApprover: lastApprovedReviewer
             } : { hasApprovals: false };
 
       - name: Comment on PR to notify stale reviewer
