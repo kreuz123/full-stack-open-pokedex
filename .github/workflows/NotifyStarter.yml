@@ -70,4 +70,87 @@ jobs:
               core.setFailed(`GraphQL failed: ${error.message}`);
             }
 
-     
+      # Step 4: Full implementation (only if previous steps succeed)
+      - name: Find unresolved threads started by this reviewer
+        id: check-unresolved-threads
+        if: steps.test-graphql.outputs.graphql-test == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const prNumber = context.payload.pull_request.number;
+              const reviewer = context.payload.review.user.login;
+              
+              console.log(`Checking PR #${prNumber} for reviewer ${reviewer}`);
+
+              const query = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      reviewThreads(first: 100) {
+                        nodes {
+                          isResolved
+                          comments(first: 1) {
+                            nodes {
+                              url
+                              body
+                              author {
+                                login
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+
+              const result = await github.graphql(query, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber
+              });
+
+              const reviewThreads = result.repository.pullRequest.reviewThreads.nodes || [];
+              const unresolvedThreads = reviewThreads.filter(thread => !thread.isResolved);
+              
+              console.log(`Found ${unresolvedThreads.length} unresolved threads`);
+
+              const myUnresolvedThreads = unresolvedThreads.filter(thread => {
+                const firstComment = thread.comments?.nodes?.[0];
+                return firstComment?.author?.login === reviewer;
+              });
+
+              console.log(`Found ${myUnresolvedThreads.length} unresolved threads started by ${reviewer}`);
+
+              if (myUnresolvedThreads.length > 0) {
+                const threadList = myUnresolvedThreads.slice(0, 8).map((thread, index) => {
+                  const comment = thread.comments.nodes[0];
+                  const preview = (comment?.body || '').substring(0, 70);
+                  const url = comment?.url || '#';
+                  return `${index + 1}. [View thread](${url}) - ${preview}${preview.length >= 70 ? '...' : ''}`;
+                }).join('\n');
+
+                const extraThreads = myUnresolvedThreads.length > 8 ? 
+                  `\n\n*... and ${myUnresolvedThreads.length - 8} more thread(s)*` : '';
+
+                const commentBody = `@${reviewer} You have approved this PR, but you also started ${myUnresolvedThreads.length} unresolved review thread(s). Please resolve your own conversations before merging.
+
+**Your unresolved review threads:**
+${threadList}${extraThreads}
+
+Please resolve your conversations before merging this PR. Thank you! 🙏`;
+
+                core.setOutput('prNumber', prNumber.toString());
+                core.setOutput('commentBody', commentBody);
+                core.setOutput('shouldComment', 'true');
+              } else {
+                core.setOutput('shouldComment', 'false');
+              }
+              
+            } catch (error) {
+              console.error('Error in main script:', error);
+              core.setOutput('shouldComment', 'false');
+              // Don't fail the entire workflow, just skip commenting
+            }
