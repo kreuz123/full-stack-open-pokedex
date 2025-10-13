@@ -1,4 +1,4 @@
-name: Comment on Unresolved Review Threads (Step by Step)
+name: Comment on Unresolved Review Threads (Clean Version)
 
 on:
   pull_request_review:
@@ -21,61 +21,21 @@ jobs:
           echo "Reviewer: ${{ github.event.review.user.login }}"
           echo "PR Number: ${{ github.event.pull_request.number }}"
 
-      - name: Step 1 - Get basic review threads info
-        id: step1
+      - name: Check for unresolved threads by reviewer
+        id: check-threads
         uses: actions/github-script@v7
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
             const reviewer = context.payload.review.user.login;
             
-            console.log('Step 1: Getting basic review threads info...');
+            console.log('Checking for unresolved threads...');
             
             const query = `
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
-                    reviewThreads(first: 10) {
-                      totalCount
-                      nodes {
-                        isResolved
-                      }
-                    }
-                  }
-                }
-              }
-            `;
-            
-            const result = await github.graphql(query, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              number: prNumber
-            });
-            
-            const threads = result.repository.pullRequest.reviewThreads.nodes;
-            const unresolvedCount = threads.filter(t => !t.isResolved).length;
-            
-            console.log(`Total threads: ${threads.length}, Unresolved: ${unresolvedCount}`);
-            
-            core.setOutput('totalThreads', threads.length.toString());
-            core.setOutput('unresolvedThreads', unresolvedCount.toString());
-
-      - name: Step 2 - Get thread details if there are unresolved threads
-        id: step2
-        if: steps.step1.outputs.unresolvedThreads != '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const prNumber = context.payload.pull_request.number;
-            const reviewer = context.payload.review.user.login;
-            
-            console.log('Step 2: Getting thread details...');
-            
-            const query = `
-              query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $number) {
-                    reviewThreads(first: 10) {
+                    reviewThreads(first: 20) {
                       nodes {
                         isResolved
                         comments(first: 1) {
@@ -102,39 +62,40 @@ jobs:
             
             const threads = result.repository.pullRequest.reviewThreads.nodes;
             let myUnresolvedCount = 0;
+            let threadList = '';
             
             for (const thread of threads) {
               if (!thread.isResolved && thread.comments.nodes.length > 0) {
                 const firstComment = thread.comments.nodes[0];
                 if (firstComment.author && firstComment.author.login === reviewer) {
                   myUnresolvedCount++;
-                  console.log(`Found unresolved thread by ${reviewer}: ${firstComment.body.substring(0, 50)}...`);
+                  if (myUnresolvedCount <= 8) {
+                    const preview = firstComment.body.substring(0, 70);
+                    threadList += `${myUnresolvedCount}. [View thread](${firstComment.url}) - ${preview}${preview.length >= 70 ? '...' : ''}\n`;
+                  }
                 }
               }
             }
             
             console.log(`${reviewer} has ${myUnresolvedCount} unresolved threads`);
             
-            core.setOutput('myUnresolvedCount', myUnresolvedCount.toString());
+            // Set outputs for the comment step
+            core.setOutput('hasUnresolvedThreads', myUnresolvedCount > 0 ? 'true' : 'false');
+            core.setOutput('prNumber', prNumber.toString());
+            core.setOutput('reviewer', reviewer);
+            core.setOutput('unresolvedCount', myUnresolvedCount.toString());
+            core.setOutput('threadList', threadList);
+            core.setOutput('extraThreadsCount', Math.max(0, myUnresolvedCount - 8).toString());
 
-      - name: Step 3 - Post comment if needed
-        if: steps.step2.outputs.myUnresolvedCount != '0'
-        uses: actions/github-script@v7
+      - name: Comment on PR to notify reviewer
+        if: steps.check-threads.outputs.hasUnresolvedThreads == 'true'
+        uses: peter-evans/create-or-update-comment@v4
         with:
-          script: |
-            const prNumber = context.payload.pull_request.number;
-            const reviewer = context.payload.review.user.login;
-            const count = '${{ steps.step2.outputs.myUnresolvedCount }}';
-            
-            console.log(`Posting comment for ${count} unresolved threads...`);
-            
-            const commentBody = `@${reviewer} You have approved this PR, but you also started ${count} unresolved review thread(s). Please resolve your own conversations before merging. Thank you! 🙏`;
-            
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: commentBody
-            });
-            
-            console.log('Comment posted successfully');
+          issue-number: ${{ steps.check-threads.outputs.prNumber }}
+          body: |
+            @${{ steps.check-threads.outputs.reviewer }} You have approved this PR, but you also started ${{ steps.check-threads.outputs.unresolvedCount }} unresolved review thread(s). Please resolve your own conversations before merging.
+
+            **Your unresolved review threads:**
+            ${{ steps.check-threads.outputs.threadList }}${{ steps.check-threads.outputs.extraThreadsCount != '0' && format('*... and {0} more thread(s)*', steps.check-threads.outputs.extraThreadsCount) || '' }}
+
+            Please resolve your conversations before merging this PR. Thank you! 🙏
