@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   issues: write
 
 jobs:
@@ -14,17 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.review.state == 'approved'
     steps:
-      # Step 1: Query unresolved review threads and filter those started by the approver
+      # Add debugging step
+      - name: Debug - Print event data
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Review State: ${{ github.event.review.state }}"
+          echo "Reviewer: ${{ github.event.review.user.login }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+
       - name: Find unresolved threads started by this reviewer
         id: check-unresolved-threads
         uses: actions/github-script@v7
         with:
           script: |
-            // Get PR number and the username of the reviewer who approved
             const prNumber = context.payload.pull_request.number;
             const reviewer = context.payload.review.user.login;
+            
+            console.log(`Checking PR #${prNumber} for reviewer ${reviewer}`);
 
-            // GraphQL query to get the first comment (thread starter) in each review thread
             const query = `
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
@@ -48,26 +55,27 @@ jobs:
               }
             `;
 
-            // Fetch review threads using GraphQL
-            const result = await github.graphql(query, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              number: prNumber
-            });
+            try {
+              const result = await github.graphql(query, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber
+              });
 
-            // Get unresolved threads
-            const reviewThreads = result.repository.pullRequest.reviewThreads.nodes;
-            const unresolvedThreads = reviewThreads.filter(thread => !thread.isResolved);
+              const reviewThreads = result.repository.pullRequest.reviewThreads.nodes;
+              const unresolvedThreads = reviewThreads.filter(thread => !thread.isResolved);
+              
+              console.log(`Found ${unresolvedThreads.length} unresolved threads`);
 
-            // Filter threads where the starter is this reviewer
-            const myUnresolvedThreads = unresolvedThreads.filter(thread => {
-              const firstComment = thread.comments.nodes[0];
-              return firstComment?.author?.login === reviewer;
-            });
+              const myUnresolvedThreads = unresolvedThreads.filter(thread => {
+                const firstComment = thread.comments.nodes[0];
+                return firstComment?.author?.login === reviewer;
+              });
 
-            // If there are unresolved threads started by this reviewer, prepare the comment body
-            if (myUnresolvedThreads.length > 0) {
-              const commentBody = `@${reviewer} You have approved this PR, but you also started ${myUnresolvedThreads.length} unresolved review thread(s). Please resolve your own conversations before merging.
+              console.log(`Found ${myUnresolvedThreads.length} unresolved threads started by ${reviewer}`);
+
+              if (myUnresolvedThreads.length > 0) {
+                const commentBody = `@${reviewer} You have approved this PR, but you also started ${myUnresolvedThreads.length} unresolved review thread(s). Please resolve your own conversations before merging.
 
 **Your unresolved review threads:**
 ${myUnresolvedThreads.slice(0, 8).map((thread, index) => {
@@ -78,22 +86,17 @@ ${myUnresolvedThreads.slice(0, 8).map((thread, index) => {
 
 Please resolve your conversations before merging this PR. Thank you! 🙏`;
 
-              // Output for next step
-              return {
-                prNumber,
-                commentBody,
-                shouldComment: true
-              };
+                core.setOutput('prNumber', prNumber);
+                core.setOutput('commentBody', commentBody);
+                core.setOutput('shouldComment', 'true');
+              } else {
+                core.setOutput('shouldComment', 'false');
+              }
+            } catch (error) {
+              console.error('Error:', error);
+              core.setFailed(`Script failed: ${error.message}`);
             }
-            // If no such threads, do not comment
-            return {
-              prNumber,
-              commentBody: '',
-              shouldComment: false
-            };
-          result-encoding: string
 
-      # Step 2: Leave a comment using peter-evans/create-or-update-comment (only if needed)
       - name: Comment on PR to notify reviewer
         if: steps.check-unresolved-threads.outputs.shouldComment == 'true'
         uses: peter-evans/create-or-update-comment@v4
