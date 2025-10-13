@@ -1,0 +1,106 @@
+name: Debug GraphQL Issues
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-unresolved-conversations:
+    runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved'
+    steps:
+      - name: Debug - Print event data
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Review State: ${{ github.event.review.state }}"
+          echo "Reviewer: ${{ github.event.review.user.login }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+
+      - name: Test basic GitHub script
+        id: test-script
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('Basic script test successful');
+            core.setOutput('test', 'success');
+
+      - name: Test simple GraphQL
+        id: test-simple-graphql
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const prNumber = context.payload.pull_request.number;
+              
+              const simpleQuery = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      number
+                      title
+                    }
+                  }
+                }
+              `;
+              
+              const result = await github.graphql(simpleQuery, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber
+              });
+              
+              console.log('Simple GraphQL successful:', result);
+              core.setOutput('simple-graphql', 'success');
+              
+            } catch (error) {
+              console.error('Simple GraphQL Error:', error);
+              core.setOutput('simple-graphql', 'failed');
+            }
+
+      # Test reviewThreads API specifically
+      - name: Test reviewThreads GraphQL
+        id: test-review-threads
+        if: steps.test-simple-graphql.outputs.simple-graphql == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const prNumber = context.payload.pull_request.number;
+              
+              console.log('Testing reviewThreads API...');
+              
+              const reviewThreadsQuery = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      number
+                      reviewThreads(first: 5) {
+                        totalCount
+                        nodes {
+                          isResolved
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const result = await github.graphql(reviewThreadsQuery, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber
+              });
+              
+              console.log('ReviewThreads GraphQL successful:', JSON.stringify(result, null, 2));
+              core.setOutput('review-threads', 'success');
+              
+            } catch (error) {
+              console.error('ReviewThreads GraphQL Error:', error.message);
+              console.error('Full error:', error);
+              core.setOutput('review-threads', 'failed');
+            }
