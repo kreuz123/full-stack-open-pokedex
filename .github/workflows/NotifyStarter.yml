@@ -12,6 +12,7 @@ permissions:
 jobs:
   check-unresolved-conversations:
     runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved'
     steps:
       # Step 1: Query unresolved review threads and filter those started by the approver
       - name: Find unresolved threads started by this reviewer
