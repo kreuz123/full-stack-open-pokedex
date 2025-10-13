@@ -35,4 +35,39 @@ jobs:
             // Set a simple output
             core.setOutput('test', 'success');
 
-      
+      # Step 3: Test GraphQL query (simplified)
+      - name: Test GraphQL query
+        id: test-graphql
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const prNumber = context.payload.pull_request.number;
+              
+              // Simple GraphQL test first
+              const simpleQuery = `
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      number
+                      title
+                    }
+                  }
+                }
+              `;
+              
+              const result = await github.graphql(simpleQuery, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber
+              });
+              
+              console.log('GraphQL query successful:', result);
+              core.setOutput('graphql-test', 'success');
+              
+            } catch (error) {
+              console.error('GraphQL Error:', error);
+              core.setFailed(`GraphQL failed: ${error.message}`);
+            }
+
+     
