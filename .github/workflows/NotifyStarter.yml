@@ -1,4 +1,4 @@
-name: Comment on Unresolved Review Threads (Clean Version)
+name: Comment on Unresolved Review Threads
 
 on:
   pull_request_review:
@@ -14,13 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.review.state == 'approved'
     steps:
-      - name: Debug - Print event data
-        run: |
-          echo "Event: ${{ github.event_name }}"
-          echo "Review State: ${{ github.event.review.state }}"
-          echo "Reviewer: ${{ github.event.review.user.login }}"
-          echo "PR Number: ${{ github.event.pull_request.number }}"
-
       - name: Check for unresolved threads by reviewer
         id: check-threads
         uses: actions/github-script@v7
@@ -28,8 +21,6 @@ jobs:
           script: |
             const prNumber = context.payload.pull_request.number;
             const reviewer = context.payload.review.user.login;
-            
-            console.log('Checking for unresolved threads...');
             
             const query = `
               query($owner: String!, $repo: String!, $number: Int!) {
@@ -77,9 +68,6 @@ jobs:
               }
             }
             
-            console.log(`${reviewer} has ${myUnresolvedCount} unresolved threads`);
-            
-            // Set outputs for the comment step
             core.setOutput('hasUnresolvedThreads', myUnresolvedCount > 0 ? 'true' : 'false');
             core.setOutput('prNumber', prNumber.toString());
             core.setOutput('reviewer', reviewer);
@@ -93,9 +81,7 @@ jobs:
         with:
           issue-number: ${{ steps.check-threads.outputs.prNumber }}
           body: |
-            @${{ steps.check-threads.outputs.reviewer }} You have approved this PR, but you also started ${{ steps.check-threads.outputs.unresolvedCount }} unresolved review thread(s). Please resolve your own conversations before merging.
+            @${{ steps.check-threads.outputs.reviewer }} You have approved this PR, but you also started ${{ steps.check-threads.outputs.unresolvedCount }} unresolved review thread(s). Please resolve your own conversations. Thank you!
 
             **Your unresolved review threads:**
             ${{ steps.check-threads.outputs.threadList }}${{ steps.check-threads.outputs.extraThreadsCount != '0' && format('*... and {0} more thread(s)*', steps.check-threads.outputs.extraThreadsCount) || '' }}
-
-            Please resolve your conversations before merging this PR. Thank you! 🙏
