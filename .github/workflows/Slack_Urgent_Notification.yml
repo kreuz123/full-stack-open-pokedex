@@ -77,4 +77,4 @@ jobs:
     secrets:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-      SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
+      SLACK_REVIEWER_MAP: ${{ secrets.SLACK_REVIEWER_MAP }}
