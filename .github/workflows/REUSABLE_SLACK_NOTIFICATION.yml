@@ -41,7 +41,7 @@ jobs:
             const slackIds = [];
             const textUsers = [];
             targetUsers.forEach(user => {
-                const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
+                const id = reviewerMap[user] || reviewerMap[user.toLowerCase()];
                 id ? slackIds.push(id) : textUsers.push(user);
             });
             const mentions = [
