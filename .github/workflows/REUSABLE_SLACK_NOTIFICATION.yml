@@ -41,10 +41,13 @@ jobs:
             const slackIds = [];
             const textUsers = [];
             targetUsers.forEach(user => {
-              const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
-              id ? slackIds.push(id) : textUsers.push(user);
+                const id = reviewerMap[user] || reviewerMap[user?.toLowerCase()];
+                id ? slackIds.push(id) : textUsers.push(user);
             });
-            const mentions = [...slackIds.map(id => `<@${id}>`), ...textUsers.map(u => `@${u}`)].join(' ');
+            const mentions = [
+                ...slackIds.map(id => `<@${id}>`),
+                ...textUsers.map(u => `@${u}`)
+            ].join(' ');
             core.setOutput('mentions', mentions);
             core.setOutput('slack_ids', slackIds.join(','));
 
@@ -70,21 +73,26 @@ jobs:
             const message = `${{ inputs.message_template }}`;
 
             for (const userId of slackIds) {
-              try {
-                const result = await fetch('https://slack.com/api/chat.postMessage', {
-                  method: 'POST',
-                  headers: { 
-                    'Content-Type': 'application/json', 
-                    'Authorization': `Bearer ${token}` 
-                  },
-                  body: JSON.stringify({ channel: userId, text: message })
-                });
-          
+                try {
+                    const result = await fetch('https://slack.com/api/chat.postMessage', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            channel: userId,
+                            text: message
+                        })
+                    });
+
                 const json = await result.json();
-                core.info(json.ok ? `DM sent to ${userId}` : `DM failed: ${json.error}`);
-              } catch (error) {
-                core.error(`Failed to send DM to ${userId}: ${error.message}`);
-              }
+                core.info(json.ok
+                    ? `DM sent to ${userId}`
+                    : `DM failed: ${json.error}`);
+                } catch (error) {
+                    core.error(`Failed to send DM to ${userId}: ${error.message}`);
+                }
             }
-      
+
             core.info(`Processed ${slackIds.length} Slack DMs`);
