@@ -12,7 +12,7 @@ jobs:
       users: ${{ steps.check.outputs.users }}
       channel: ${{ steps.check.outputs.channel }}
       dm: ${{ steps.check.outputs.dm }}
-    
+
     steps:
       - name: Check urgent and notify
         id: check
@@ -25,41 +25,41 @@ jobs:
             const newReviewer = `${{ github.event.requested_reviewer.login }}`;
             const prAge = (Date.now() - new Date(`${{ github.event.pull_request.created_at }}`)) / 1000;
             const isPrFresh = prAge < 60;
-            
+
             let isUrgent = false;
             let targetUsers = '';
             let sendChannel = false;
             let sendDM = false;
-            
+
             core.info(`Action: ${action}, HasUrgent: ${hasUrgent}, NewReviewer: ${newReviewer}, AllReviewers: ${allReviewers}, PrAge: ${Math.round(prAge)}s`);
-            
+
             if (action === 'labeled') {
-              const newLabel = `${{ github.event.label.name }}`;
-              core.info(`New label: ${newLabel}`);
-              
-              if (newLabel.toLowerCase() === 'urgent') {
-                isUrgent = true;
-                if (isPrFresh) {
-                  targetUsers = '';
-                  sendChannel = allReviewers.length === 0;
-                  sendDM = false;
-                } else {
-                  targetUsers = allReviewers;
-                  sendChannel = true;
-                  sendDM = allReviewers.length > 0;
+                const newLabel = `${{ github.event.label.name }}`;
+                core.info(`New label: ${newLabel}`);
+
+                if (newLabel.toLowerCase() === 'urgent') {
+                    isUrgent = true;
+                    if (isPrFresh) {
+                        targetUsers = '';
+                        sendChannel = allReviewers.length === 0;
+                        sendDM = false;
+                    } else {
+                        targetUsers = allReviewers;
+                        sendChannel = true;
+                        sendDM = allReviewers.length > 0;
+                    }
                 }
-              }
             } else if (action === 'review_requested') {
-              if (hasUrgent && newReviewer) {
-                isUrgent = true;
-                targetUsers = newReviewer;
-                sendChannel = true;
-                sendDM = true;
-              }
+                if (hasUrgent && newReviewer) {
+                    isUrgent = true;
+                    targetUsers = newReviewer;
+                    sendChannel = true;
+                    sendDM = true;
+                }
             }
-            
+
             core.info(`Result - Urgent: ${isUrgent}, Users: ${targetUsers}, Channel: ${sendChannel}, DM: ${sendDM}`);
-            
+
             core.setOutput('urgent', isUrgent);
             core.setOutput('users', targetUsers);
             core.setOutput('channel', sendChannel);
@@ -68,7 +68,7 @@ jobs:
   call_notification:
     needs: notify_urgent
     if: needs.notify_urgent.outputs.urgent == 'true'
-    uses: ./.github/workflows/reusable-slack-notification.yml
+    uses: ./.github/workflows/REUSABLE_SLACK_NOTIFICATION.yml
     with:
       message_template: "🚨 Urgent PR: <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}> needs review ASAP!"
       target_users: ${{ needs.notify_urgent.outputs.users }}
