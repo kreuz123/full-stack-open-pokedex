@@ -33,7 +33,7 @@ jobs:
         id: mention
         uses: actions/github-script@v7
         env:
-          SLACK_REVIEWER_MAP: ${{ vars.SLACK_REVIEWER_MAP }}
+          SLACK_REVIEWER_MAP: ${{ secrets.SLACK_REVIEWER_MAP }}
         with:
           script: |
             const reviewerMap = JSON.parse(process.env.SLACK_REVIEWER_MAP || "{}");
