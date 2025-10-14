@@ -23,46 +23,44 @@ jobs:
             const reviewer = context.payload.review.user.login;
             
             const { repository } = await github.graphql(`
-              query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $number) {
-                    reviewThreads(first: 50) {
-                      nodes {
-                        isResolved
-                        comments(first: 1) {
-                          nodes {
-                            author { login }
-                            body
-                            url
+                query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                            reviewThreads(first: 50) {
+                                nodes {
+                                    isResolved
+                                    comments(first: 1) {
+                                nodes {
+                                    author { login }
+                                    body
+                                url
+                            }
                           }
                         }
                       }
                     }
                   }
                 }
-              }
             `, { owner, repo, number: context.payload.pull_request.number });
             
             const unresolvedThreads = repository.pullRequest.reviewThreads.nodes
-              .filter(thread => 
-                !thread.isResolved && 
-                thread.comments.nodes[0]?.author?.login === reviewer
-              );
+                .filter(thread => 
+                    !thread.isResolved && 
+                    thread.comments.nodes[0]?.author?.login === reviewer
+                );
             
             if (unresolvedThreads.length === 0) return;
             
             const threadList = unresolvedThreads
-              .slice(0, 8)
-              .map((thread, index) => {
-                const preview = thread.comments.nodes[0].body.substring(0, 70);
+                .map((thread, index) => {
+                    const preview = thread.comments.nodes[0].body.substring(0, 70);
                 return `${index + 1}. [View thread](${thread.comments.nodes[0].url}) - ${preview}${preview.length >= 70 ? '...' : ''}`;
-              })
-              .join('\n');
+                })
+                .join('\n');
             
             core.setOutput('reviewer', reviewer);
             core.setOutput('unresolvedCount', unresolvedThreads.length);
             core.setOutput('threadList', threadList);
-            core.setOutput('extraCount', Math.max(0, unresolvedThreads.length - 8));
 
       - name: Comment on PR to notify reviewer
         if: steps.check-threads.outputs.reviewer
@@ -73,4 +71,4 @@ jobs:
             @${{ steps.check-threads.outputs.reviewer }} You have approved this PR, but you also started ${{ steps.check-threads.outputs.unresolvedCount }} unresolved review thread(s). Please resolve your own conversations. Thank you!
 
             **Your unresolved review threads:**
-            ${{ steps.check-threads.outputs.threadList }}${{ steps.check-threads.outputs.extraCount != '0' && format('*... and {0} more thread(s)*', steps.check-threads.outputs.extraCount) || '' }}
+            ${{ steps.check-threads.outputs.threadList }}
