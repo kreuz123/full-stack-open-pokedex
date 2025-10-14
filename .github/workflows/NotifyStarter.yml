@@ -1,0 +1,74 @@
+name: Comment on Unresolved Review Threads
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-unresolved-conversations:
+    runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved'
+    steps:
+      - name: Check for unresolved threads by reviewer
+        id: check-threads
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const reviewer = context.payload.review.user.login;
+            
+            const { repository } = await github.graphql(`
+                query($owner: String!, $repo: String!, $number: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                        pullRequest(number: $number) {
+                            reviewThreads(first: 100) {
+                                nodes {
+                                    isResolved
+                                    comments(first: 1) {
+                                nodes {
+                                    author { login }
+                                    body
+                                url
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+            `, { owner, repo, number: context.payload.pull_request.number });
+            
+            const unresolvedThreads = repository.pullRequest.reviewThreads.nodes
+                .filter(thread => 
+                    !thread.isResolved && 
+                    thread.comments.nodes[0]?.author?.login === reviewer
+                );
+            
+            if (unresolvedThreads.length === 0) return;
+            
+            const threadList = unresolvedThreads
+                .map((thread, index) => {
+                    const preview = thread.comments.nodes[0].body.substring(0, 70);
+                return `${index + 1}. [View thread](${thread.comments.nodes[0].url}) - ${preview}${preview.length >= 70 ? '...' : ''}`;
+                })
+                .join('\n');
+            
+            core.setOutput('reviewer', reviewer);
+            core.setOutput('unresolvedCount', unresolvedThreads.length);
+            core.setOutput('threadList', threadList);
+
+      - name: Comment on PR to notify reviewer
+        if: steps.check-threads.outputs.reviewer
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            @${{ steps.check-threads.outputs.reviewer }} You have approved this PR, but you also started ${{ steps.check-threads.outputs.unresolvedCount }} unresolved review thread(s). Please resolve your own conversations. Thank you!
+
+            **Your unresolved review threads:**
+            ${{ steps.check-threads.outputs.threadList }}
