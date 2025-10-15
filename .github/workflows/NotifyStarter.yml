@@ -1,4 +1,4 @@
-name: Comment on Unresolved Review Threads
+name: Notify Unresolved Review to Approver
 
 on:
   pull_request_review:
@@ -21,7 +21,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const reviewer = context.payload.review.user.login;
-            
+
             const { repository } = await github.graphql(`
                 query($owner: String!, $repo: String!, $number: Int!) {
                     repository(owner: $owner, name: $repo) {
@@ -30,34 +30,37 @@ jobs:
                                 nodes {
                                     isResolved
                                     comments(first: 1) {
-                                nodes {
-                                    author { login }
-                                    body
-                                url
+                                        nodes {
+                                            author { login }
+                                            body
+                                            url
+                                        }
+                                    }
+                                }
                             }
-                          }
                         }
-                      }
                     }
                   }
                 }
             `, { owner, repo, number: context.payload.pull_request.number });
-            
+
             const unresolvedThreads = repository.pullRequest.reviewThreads.nodes
-                .filter(thread => 
-                    !thread.isResolved && 
-                    thread.comments.nodes[0]?.author?.login === reviewer
+                .filter(thread =>
+                    !thread.isResolved
+                    && thread.comments.nodes[0]?.author?.login === reviewer
                 );
-            
+
             if (unresolvedThreads.length === 0) return;
-            
+
             const threadList = unresolvedThreads
                 .map((thread, index) => {
                     const preview = thread.comments.nodes[0].body.substring(0, 70);
-                return `${index + 1}. [View thread](${thread.comments.nodes[0].url}) - ${preview}${preview.length >= 70 ? '...' : ''}`;
+                    return `${index + 1}. [View thread](${thread.comments.nodes[0].url}) - ${preview}${preview.length >= 70
+                    ? '...'
+                    : ''}`;
                 })
                 .join('\n');
-            
+
             core.setOutput('reviewer', reviewer);
             core.setOutput('unresolvedCount', unresolvedThreads.length);
             core.setOutput('threadList', threadList);
