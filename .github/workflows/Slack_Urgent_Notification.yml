@@ -1,0 +1,47 @@
+name: Urgent PR Slack Notification
+
+on:
+  pull_request:
+    types: [opened, labeled, synchronize]
+
+jobs:
+  notify_urgent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get PR number
+        id: pr
+        run: echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      - name: Check label "urgent"
+        id: label_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number(`${{ steps.pr.outputs.number }}`);
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            const labels = (pr.data.labels || []).map(l => (l.name || '').trim());
+            core.info(`PR #${prNumber} labels: ${JSON.stringify(labels)}`);
+
+            const hasUrgent = labels.some(n => n.toLowerCase().startsWith('urgent'));
+            core.setOutput('hasUrgent', String(hasUrgent));
+            core.setOutput('url', pr.data.html_url);
+            core.setOutput('title', pr.data.title);
+
+      - name: Send Slack notification if urgent
+        if: ${{ steps.label_check.outputs.hasUrgent == 'true' }}
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            { 
+              "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
+              "text": "🚨 Urgent PR: <${{ steps.label_check.outputs.url }}|${{ steps.label_check.outputs.title }}> needs review within 30 minutes!"
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
